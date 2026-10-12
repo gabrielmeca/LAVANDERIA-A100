@@ -10,11 +10,11 @@ O controle de caixa antigo (`index.html` na raiz) continua funcionando como ante
 | Aba | Recursos |
 |---|---|
 | **Dashboard** | Resultado, recebido, pago, a receber/a pagar em aberto (com vencidos), valor em estoque; gráficos de fluxo de caixa mensal, resultado mensal, previsão das próximas 12 semanas, receita por serviço, maiores clientes, despesas por categoria e comparativo entre empresas. |
-| **Contas a pagar / receber** | Lançamentos com cliente/fornecedor, serviço, categoria, parcelas, baixa e estorno. Filtros por tipo, situação, cliente, serviço, categoria, datas e busca. Exportação em CSV. |
+| **Contas a pagar / receber** | Lançamentos com cliente/fornecedor, serviço, categoria, parcelas, baixa e estorno. Contas a pagar têm a coluna **Forma de compra**. Filtros por tipo, situação, cliente, serviço, categoria, forma de compra, datas e busca. Exportação em CSV. |
 | **Clientes e fornecedores** | Cadastro com totais recebidos e em aberto. |
 | **Serviços** | Preço padrão e faturamento por serviço. |
 | **Estoque** | Produtos, saldo, mínimo, entradas/saídas/ajustes, geração automática de conta. |
-| **Categorias** | Categorias de receita e despesa, organizadas por grupo. Criar, renomear (as contas acompanham), desativar e excluir. |
+| **Categorias** | Categorias de receita e despesa, organizadas por grupo, e a lista de **Formas de compra**. Criar, renomear (as contas acompanham), desativar e excluir. |
 | **Importar** | Modelos de planilha (Excel/CSV) para contas, clientes/fornecedores, serviços, produtos, movimentações e categorias. Mostra a conferência linha a linha antes de gravar. |
 | **Empresas e backup** | Várias empresas; backup em JSON. |
 | **Usuários e acessos** | (só administradores) Criar usuários, liberar quem se cadastrou e criar **níveis de acesso**. |

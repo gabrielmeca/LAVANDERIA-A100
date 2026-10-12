@@ -182,9 +182,9 @@
 const SUPABASE_URL = "https://rqyxigyabvpfovhhgetm.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_mOidO636lc40mqWAONsn9A_Enr8NDRF";
 
-const TABLES = ['empresas', 'parceiros', 'servicos', 'lancamentos', 'produtos', 'movimentos_estoque', 'categorias', 'niveis_acesso', 'perfis'];
+const TABLES = ['empresas', 'parceiros', 'servicos', 'lancamentos', 'produtos', 'movimentos_estoque', 'categorias', 'formas_compra', 'niveis_acesso', 'perfis'];
 // tabelas de dados de negócio (as de usuários/níveis só existem online)
-const DATA_TABLES = ['empresas', 'parceiros', 'servicos', 'lancamentos', 'produtos', 'movimentos_estoque', 'categorias'];
+const DATA_TABLES = ['empresas', 'parceiros', 'servicos', 'lancamentos', 'produtos', 'movimentos_estoque', 'categorias', 'formas_compra'];
 
 // ---------- níveis de acesso: o que cada módulo permite ----------
 const MODULOS = [
@@ -321,6 +321,10 @@ async function loadAll() {
     lsSet('cats-seed', '1');
     D.categorias = await LocalDB.insert('categorias', CATEGORIAS_PADRAO.map(([nome, tipo, grupo]) => ({ nome, tipo, grupo, ativo: true, empresa_id: null })));
   }
+  if (mode === 'local' && !D.formas_compra.length && !lsGet('formas-seed')) {
+    lsSet('formas-seed', '1');
+    D.formas_compra = await LocalDB.insert('formas_compra', FORMAS_COMPRA_PADRAO.map(nome => ({ nome, ativo: true })));
+  }
   if (mode === 'supabase') {
     meuPerfil = D.perfis.find(p => p.user_id === user?.id) || null;
     minhasPerms = (meuPerfil && nivel(meuPerfil.nivel_id)?.permissoes) || {};
@@ -335,6 +339,7 @@ async function loadAll() {
     }
   }
 }
+const FORMAS_COMPRA_PADRAO = ['À vista', 'A prazo (boleto)', 'Cartão de crédito', 'Pix', 'Transferência'];
 const CATEGORIAS_PADRAO = [
   ['Lavagem', 'receber', 'Receitas'], ['Secagem', 'receber', 'Receitas'], ['Combos', 'receber', 'Receitas'], ['Lavanderia assistida', 'receber', 'Receitas'],
   ['Venda de produtos', 'receber', 'Receitas'], ['Serviços', 'receber', 'Receitas'], ['Outras receitas', 'receber', 'Receitas'],
@@ -413,7 +418,7 @@ let modalOpen = false, pendingRender = false;
 const charts = {};
 
 const [m0, m1] = presetRange('mes');
-const F = { tipo: '', status: '', parceiro: '', servico: '', categoria: '', campo: 'vencimento', preset: 'mes', de: m0, ate: m1, q: '' };
+const F = { tipo: '', status: '', parceiro: '', servico: '', categoria: '', formaCompra: '', campo: 'vencimento', preset: 'mes', de: m0, ate: m1, q: '' };
 const [a0, a1] = presetRange('ano');
 const DF = { preset: 'ano', de: a0, ate: a1 };
 const PF = { q: '', tipo: '' };
@@ -667,7 +672,7 @@ function rankChart(id, pairs, color, label) {
 // ---------------- CONTAS ----------------
 function setF(k, v) { F[k] = v; if (k === 'de' || k === 'ate') F.preset = ''; renderContasLista(); }
 function setContasPreset(p) { F.preset = p; [F.de, F.ate] = presetRange(p); renderTab(); }
-function limparFiltros() { Object.assign(F, { tipo: '', status: '', parceiro: '', servico: '', categoria: '', q: '' }); setContasPreset('tudo'); }
+function limparFiltros() { Object.assign(F, { tipo: '', status: '', parceiro: '', servico: '', categoria: '', formaCompra: '', q: '' }); setContasPreset('tudo'); }
 function verContasDe(campo, id) { limparFiltros(); F[campo] = id; setTab('contas'); }
 
 function filtrarContas() {
@@ -679,10 +684,11 @@ function filtrarContas() {
     if (F.parceiro && l.parceiro_id !== F.parceiro) return false;
     if (F.servico && l.servico_id !== F.servico) return false;
     if (F.categoria && l.categoria !== F.categoria) return false;
+    if (F.formaCompra && (l.tipo !== 'pagar' || (F.formaCompra === '-' ? !!l.forma_compra : l.forma_compra !== F.formaCompra))) return false;
     const d = F.campo === 'pagamento' ? l.pagamento : l.vencimento;
     if ((F.de || F.ate) && !inPeriod(d, F.de, F.ate)) return false;
     if (q) {
-      const hay = [l.descricao, parceiro(l.parceiro_id)?.nome, servico(l.servico_id)?.nome, l.categoria, l.observacao, l.forma_pagamento].join(' ').toLowerCase();
+      const hay = [l.descricao, parceiro(l.parceiro_id)?.nome, servico(l.servico_id)?.nome, l.categoria, l.observacao, l.forma_pagamento, l.forma_compra].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -702,6 +708,7 @@ function tabContas(body) {
       <div class="f"><label>Cliente / fornecedor</label><select onchange="setF('parceiro', this.value)">${opts(parcs.map(p => [p.id, p.nome]), F.parceiro, 'Todos')}</select></div>
       <div class="f"><label>Serviço</label><select onchange="setF('servico', this.value)">${opts(servs.map(s => [s.id, s.nome]), F.servico, 'Todos')}</select></div>
       <div class="f"><label>Categoria</label><select onchange="setF('categoria', this.value)">${opts(categorias().map(c => [c, c]), F.categoria, 'Todas')}</select></div>
+      ${canConta('pagar', 'ver') ? `<div class="f"><label>Forma de compra</label><select onchange="setF('formaCompra', this.value)">${opts([...new Set([...D.formas_compra.map(x => x.nome), ...D.lancamentos.map(l => l.forma_compra).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'pt-BR')).map(n => [n, n]).concat([['-', '(não informada)']]), F.formaCompra, 'Todas')}</select></div>` : ''}
       <div class="f"><label>Filtrar data por</label><select onchange="setF('campo', this.value)">${opts([['vencimento', 'Vencimento'], ['pagamento', 'Pagamento']], F.campo)}</select></div>
       <div class="f"><label>De</label><input type="date" value="${F.de}" onchange="setF('de', this.value); renderTab()"></div>
       <div class="f"><label>Até</label><input type="date" value="${F.ate}" onchange="setF('ate', this.value); renderTab()"></div>
@@ -719,9 +726,10 @@ function renderContasLista() {
   const tot = (tipo, fn) => ativos.filter(l => l.tipo === tipo && fn(l)).reduce((s, l) => s + valorReal(l), 0);
   const all = () => true, aberto = l => l.status === 'pendente', quit = l => l.status === 'pago';
   const multi = !empresaAtual && D.empresas.length > 1;
+  const colForma = rows.some(l => l.tipo === 'pagar');
   el.innerHTML = rows.length ? `
     <div class="tbl-wrap"><table>
-      <thead><tr><th>Vencimento</th>${multi ? '<th>Empresa</th>' : ''}<th>Descrição</th><th class="hide-sm">Cliente / fornecedor</th><th class="hide-sm">Serviço / categoria</th><th class="num">Valor</th><th>Situação</th><th></th></tr></thead>
+      <thead><tr><th>Vencimento</th>${multi ? '<th>Empresa</th>' : ''}<th>Descrição</th><th class="hide-sm">Cliente / fornecedor</th><th class="hide-sm">Serviço / categoria</th>${colForma ? '<th class="hide-sm">Forma de compra</th>' : ''}<th class="num">Valor</th><th>Situação</th><th></th></tr></thead>
       <tbody>${rows.map(l => {
         const st = statusEf(l);
         return `<tr>
@@ -730,6 +738,7 @@ function renderContasLista() {
           <td><span class="tag ${l.tipo}">${l.tipo === 'pagar' ? 'Pagar' : 'Receber'}</span> ${esc(l.descricao)}${l.forma_pagamento ? `<div class="muted">${esc(l.forma_pagamento)}</div>` : ''}</td>
           <td class="hide-sm">${esc(parceiro(l.parceiro_id)?.nome || '—')}</td>
           <td class="hide-sm">${esc(servico(l.servico_id)?.nome || '')}${l.categoria ? `<div class="muted">${esc(l.categoria)}</div>` : ''}</td>
+          ${colForma ? `<td class="hide-sm">${l.tipo === 'pagar' ? esc(l.forma_compra || '—') : ''}</td>` : ''}
           <td class="num ${l.tipo === 'pagar' ? 'val-out' : 'val-in'}">${brl(valorReal(l))}</td>
           <td><span class="tag ${st}">${STATUS_LABEL[st]}</span></td>
           <td class="acts">
@@ -751,10 +760,10 @@ function renderContasLista() {
 function podeBaixar(tipo) { return canConta(tipo, 'baixar') || canConta(tipo, 'editar'); }
 function exportCSV() {
   const rows = filtrarContas().filter(l => canConta(l.tipo, 'exportar'));
-  const head = ['Empresa', 'Tipo', 'Descrição', 'Cliente/Fornecedor', 'Serviço', 'Categoria', 'Vencimento', 'Valor', 'Situação', 'Pagamento', 'Valor pago', 'Forma', 'Observação'];
+  const head = ['Empresa', 'Tipo', 'Descrição', 'Cliente/Fornecedor', 'Serviço', 'Categoria', 'Forma de compra', 'Vencimento', 'Valor', 'Situação', 'Pagamento', 'Valor pago', 'Forma', 'Observação'];
   const cell = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const money = v => v == null || v === '' ? '' : num(v).toFixed(2).replace('.', ',');
-  const lines = rows.map(l => [nomeEmpresa(l.empresa_id), l.tipo === 'pagar' ? 'A pagar' : 'A receber', l.descricao, parceiro(l.parceiro_id)?.nome, servico(l.servico_id)?.nome, l.categoria,
+  const lines = rows.map(l => [nomeEmpresa(l.empresa_id), l.tipo === 'pagar' ? 'A pagar' : 'A receber', l.descricao, parceiro(l.parceiro_id)?.nome, servico(l.servico_id)?.nome, l.categoria, l.forma_compra,
     fmtDate(l.vencimento), money(l.valor), STATUS_LABEL[statusEf(l)], fmtDate(l.pagamento), money(l.valor_pago), l.forma_pagamento, l.observacao].map(cell).join(';'));
   download(`contas-${today()}.csv`, '﻿' + [head.map(cell).join(';'), ...lines].join('\r\n'), 'text/csv;charset=utf-8');
 }
@@ -778,6 +787,13 @@ function refreshContaSelects() {
   f.parceiro_id.innerHTML = parceiroOptsFor(emp, f.parceiro_id.value, tipo);
   f.servico_id.innerHTML = servicoOptsFor(emp, f.servico_id.value);
   f.categoria.innerHTML = categoriaOptsFor(emp, tipo, f.categoria.value);
+  toggleBox('fldFormaCompra', tipo === 'pagar');
+}
+function formasCompraAtivas() { return D.formas_compra.filter(x => x.ativo !== false).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')); }
+function formaCompraOpts(sel) {
+  const list = formasCompraAtivas().map(x => [x.nome, x.nome]);
+  if (sel && !list.some(([n]) => n === sel)) list.unshift([sel, sel]);
+  return opts(list, sel, '— não informada —');
 }
 function onServicoPick(sel) {
   const s = servico(sel.value), f = sel.form;
@@ -800,6 +816,7 @@ function formConta(id, tipoNovo) {
         <div class="fld"><label>Cliente / fornecedor</label><select name="parceiro_id">${parceiroOptsFor(emp, l?.parceiro_id, tipo)}</select></div>
         <div class="fld"><label>Serviço</label><select name="servico_id" onchange="onServicoPick(this)">${servicoOptsFor(emp, l?.servico_id)}</select></div>
         <div class="fld"><label>Categoria</label><select name="categoria">${categoriaOptsFor(emp, tipo, l?.categoria)}</select></div>
+        <div class="fld" id="fldFormaCompra" style="${tipo === 'pagar' ? '' : 'display:none'}"><label>Forma de compra${can('categorias', 'editar') ? ` · <a href="#" class="linkbtn" style="font-size:11px;text-transform:none" onclick="event.preventDefault(); closeModal(); setTab('categorias'); setTimeout(() => document.getElementById('cardFormas')?.scrollIntoView(), 50)">editar lista</a>` : ''}</label><select name="forma_compra">${formaCompraOpts(l?.forma_compra)}</select></div>
         <div class="fld"><label>Valor (R$)</label><input name="valor" type="number" step="0.01" min="0" required value="${l ? num(l.valor).toFixed(2) : ''}"></div>
         <div class="fld"><label>Vencimento</label><input name="vencimento" type="date" required value="${l?.vencimento || today()}"></div>
         ${l ? '' : `<div class="fld"><label>Parcelas / repetições mensais</label><input name="parcelas" type="number" min="1" max="120" value="1"></div>`}
@@ -823,6 +840,7 @@ function salvarConta(ev, id) {
   const base = {
     tipo: v.tipo, empresa_id: v.empresa_id, descricao: v.descricao.trim(),
     parceiro_id: v.parceiro_id || null, servico_id: v.servico_id || null, categoria: v.categoria.trim() || null,
+    forma_compra: v.tipo === 'pagar' ? (v.forma_compra || null) : null,
     valor: num(v.valor), vencimento: v.vencimento, observacao: v.observacao.trim() || null
   };
   const quit = quitado
@@ -1245,8 +1263,63 @@ function tabCategorias(body) {
       <div class="f"><label>Tipo</label><select onchange="setCF('tipo', this.value)">${opts(Object.entries(TIPO_CAT), CF.tipo, 'Todos')}</select></div>
       <div class="f"><label class="check" style="margin-top:18px"><input type="checkbox" ${CF.inativas ? 'checked' : ''} onchange="setCF('inativas', this.checked)"> Mostrar inativas</label></div>
     </div>
-    <div class="card"><div id="catLista"></div></div>`;
+    <div class="card"><div id="catLista"></div></div>
+    <div class="card" id="cardFormas"><h3 class="card-title">Formas de compra</h3>
+      <p class="card-sub">Opções da coluna "Forma de compra" das contas a pagar. Crie, renomeie ou desative os nomes que vocês usam.</p>
+      ${can('categorias', 'criar') ? `<form onsubmit="return addFormaCompra(event)" style="display:flex;gap:8px;margin-bottom:10px;max-width:520px">
+        <input name="nome" required maxlength="60" placeholder="Nova forma de compra (ex.: Cartão corporativo)"><button class="btn">Adicionar</button></form>` : ''}
+      <div id="formasLista"></div></div>`;
   renderCategoriasLista();
+  renderFormasCompra();
+}
+function renderFormasCompra() {
+  const el = document.getElementById('formasLista'); if (!el) return;
+  const rows = [...D.formas_compra].sort((a, b) => (a.ativo === false) - (b.ativo === false) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  el.innerHTML = rows.length ? rows.map(x => {
+    const n = escopo(D.lancamentos).filter(l => l.forma_compra === x.nome).length;
+    return `<div class="list-row"><span><b>${esc(x.nome)}</b> <span class="muted">· ${n} conta(s)</span> ${x.ativo === false ? '<span class="tag cancelado">Inativa</span>' : ''}</span>
+      <span>${can('categorias', 'editar') ? `<button class="ibtn" onclick="formFormaCompra('${x.id}')">Renomear</button><button class="ibtn" onclick="toggleFormaCompra('${x.id}')">${x.ativo === false ? 'Ativar' : 'Desativar'}</button>` : ''}${can('categorias', 'excluir') ? `<button class="ibtn danger" onclick="excluirFormaCompra('${x.id}')">Excluir</button>` : ''}</span></div>`;
+  }).join('') : '<p class="empty">Nenhuma forma de compra cadastrada.</p>';
+}
+const formaCompra = byId('formas_compra');
+function addFormaCompra(ev) {
+  ev.preventDefault();
+  const nome = new FormData(ev.target).get('nome').trim();
+  if (!nome) return false;
+  if (D.formas_compra.some(x => norm(x.nome) === norm(nome))) { alert(`"${nome}" já existe.`); return false; }
+  run(() => DB().insert('formas_compra', [{ nome, ativo: true }]), 'Forma de compra adicionada');
+  return false;
+}
+function formFormaCompra(id) {
+  const x = formaCompra(id); if (!x) return;
+  openModal('Renomear forma de compra', `
+    <form id="mform" onsubmit="return salvarFormaCompra(event, '${x.id}')">
+      <div class="form-grid"><div class="fld full"><label>Nome</label><input name="nome" required maxlength="60" value="${esc(x.nome)}"></div>
+      <p class="hint">As contas que usam "${esc(x.nome)}" passam a usar o novo nome.</p></div>
+      <div class="modal-foot"><button type="button" class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn">Salvar</button></div>
+    </form>`);
+}
+function salvarFormaCompra(ev, id) {
+  ev.preventDefault();
+  const x = formaCompra(id), nome = new FormData(ev.target).get('nome').trim();
+  if (!x || !nome || nome === x.nome) { closeModal(); return false; }
+  if (D.formas_compra.some(o => o.id !== id && norm(o.nome) === norm(nome))) { alert(`"${nome}" já existe.`); return false; }
+  run(async () => {
+    if (mode === 'local') {
+      const db = LocalDB.read();
+      db.lancamentos = (db.lancamentos || []).map(l => l.forma_compra === x.nome ? { ...l, forma_compra: nome } : l);
+      LocalDB.write(db);
+    } else await RemoteDB.rpc('renomear_forma_compra', { antigo: x.nome, novo: nome });
+    await DB().update('formas_compra', id, { nome });
+  }, 'Forma de compra renomeada');
+  return false;
+}
+function toggleFormaCompra(id) { const x = formaCompra(id); if (x) run(() => DB().update('formas_compra', id, { ativo: x.ativo === false }), x.ativo === false ? 'Ativada' : 'Desativada (some da lista, mas as contas antigas mantêm o nome)'); }
+function excluirFormaCompra(id) {
+  const x = formaCompra(id); if (!x) return;
+  const n = D.lancamentos.filter(l => l.forma_compra === x.nome).length;
+  if (!confirm(n ? `"${x.nome}" está em ${n} conta(s). Elas continuam mostrando esse nome, mas ele sai da lista.\n\nDica: use "Desativar" para só esconder.\n\nExcluir mesmo assim?` : `Excluir "${x.nome}"?`)) return;
+  run(() => DB().remove('formas_compra', id), 'Excluída');
 }
 function usoCategoria(nome) {
   const L = escopo(D.lancamentos).filter(l => l.categoria === nome && l.status !== 'cancelado');
@@ -1351,6 +1424,7 @@ const LAYOUTS = {
     ['pagamento', 'Data pagamento', 0, 'Data dd/mm/aaaa (se pago)', ['', '15/11/2026'], ['datapagamento', 'pagoem', 'datarecebimento']],
     ['valor_pago', 'Valor pago', 0, 'Se vazio, usa o Valor', ['', '389,90'], ['valorrecebido']],
     ['forma', 'Forma pagamento', 0, 'Pix, Dinheiro, Boleto…', ['', 'Boleto'], ['formadepagamento', 'forma']],
+    ['forma_compra', 'Forma de compra', 0, 'Só contas a pagar (criada se não existir)', ['', 'A prazo (boleto)'], ['formacompra']],
     ['observacao', 'Observação', 0, 'Texto livre', ['', 'NF 1234'], ['obs']]
   ] },
   parceiros: { nome: 'Clientes e fornecedores', cols: [
@@ -1427,7 +1501,7 @@ function tabImportar(body) {
       <p class="card-sub">Aceita Excel (.xlsx, .xls) e CSV. Nada é gravado antes de você conferir e confirmar.</p>
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
         <label class="btn" style="cursor:pointer">Escolher arquivo<input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="lerArquivoImport(this.files[0]); this.value=''"></label>
-        ${['contas', 'movimentos'].includes(IMP.layout) ? `<label class="check"><input type="checkbox" ${IMP.criar ? 'checked' : ''} onchange="IMP.criar=this.checked; revalidarImport()"> Criar automaticamente clientes, serviços e categorias que não existirem</label>` : ''}
+        ${['contas', 'movimentos'].includes(IMP.layout) ? `<label class="check"><input type="checkbox" ${IMP.criar ? 'checked' : ''} onchange="IMP.criar=this.checked; revalidarImport()"> Criar automaticamente clientes, serviços, categorias e formas de compra que não existirem</label>` : ''}
         ${IMP.arquivo ? `<span class="muted">Arquivo: <b>${esc(IMP.arquivo)}</b></span>` : ''}
       </div>
       <div id="impPreview"></div>
@@ -1560,8 +1634,15 @@ function validarImport(lay, brutas) {
         else if (IMP.criar && can('categorias', 'criar')) r.cria.push(['categorias', cat, tipo || 'ambos']);
         else r.avisos.push(`Categoria "${cat}" não cadastrada (será gravada só como texto)`);
       }
+      let fc = tipo === 'pagar' && b.forma_compra ? String(b.forma_compra).trim() : null;
+      if (fc) {
+        const x = D.formas_compra.find(o => norm(o.nome) === norm(fc));
+        if (x) fc = x.nome;
+        else if (IMP.criar && can('categorias', 'criar')) r.cria.push(['formas_compra', fc]);
+        else r.avisos.push(`Forma de compra "${fc}" não cadastrada (será gravada só como texto)`);
+      }
       r.row = { empresa_id: emp, tipo, descricao: String(b.descricao ?? '').slice(0, 200), valor, vencimento: venc, status, pagamento, valor_pago: valorPago,
-        forma_pagamento: b.forma || null, parceiro_id, servico_id, categoria: cat, observacao: b.observacao || null };
+        forma_pagamento: b.forma || null, parceiro_id, servico_id, categoria: cat, observacao: b.observacao || null, forma_compra: fc };
       r.resumo = `${tipo === 'pagar' ? 'Pagar' : tipo === 'receber' ? 'Receber' : '?'} · ${b.descricao || ''} · ${valor != null && !isNaN(valor) ? brl(valor) : '?'} · ${venc ? fmtDate(venc) : '?'}`;
     }
     if (lay === 'parceiros') {
@@ -1629,7 +1710,7 @@ function renderImportPreview() {
   const ok = L.filter(r => r.status === 'ok'), err = L.filter(r => r.status === 'erro'), pul = L.filter(r => r.status === 'pular');
   const criar = new Map();
   ok.forEach(r => r.cria.forEach(([t, nome]) => criar.set(t + '|' + norm(nome), [t, nome])));
-  const nomesT = { parceiros: 'cliente(s)/fornecedor(es)', servicos: 'serviço(s)', categorias: 'categoria(s)' };
+  const nomesT = { parceiros: 'cliente(s)/fornecedor(es)', servicos: 'serviço(s)', categorias: 'categoria(s)', formas_compra: 'forma(s) de compra' };
   const contagem = {}; [...criar.values()].forEach(([t]) => contagem[t] = (contagem[t] || 0) + 1);
   el.innerHTML = `
     <div class="kpis" style="margin-top:14px">
@@ -1656,13 +1737,13 @@ async function executarImport() {
   const emLotes = async (t, rows) => { const out = []; for (let i = 0; i < rows.length; i += 500) out.push(...await DB().insert(t, rows.slice(i, i + 500))); return out; };
   const ok = await run(async () => {
     // 1) cadastros que faltam (uma vez por nome)
-    const novos = { parceiros: new Map(), servicos: new Map(), categorias: new Map() };
+    const novos = { parceiros: new Map(), servicos: new Map(), categorias: new Map(), formas_compra: new Map() };
     linhas.forEach(r => r.cria.forEach(([t, nome, extra]) => {
       const k = norm(nome);
-      if (!novos[t].has(k)) novos[t].set(k, t === 'parceiros' ? { nome, tipo: extra, empresa_id: null } : t === 'servicos' ? { nome, preco: 0, empresa_id: null } : { nome, tipo: extra, ativo: true, empresa_id: null });
-      else if (t !== 'servicos' && novos[t].get(k).tipo !== extra) novos[t].get(k).tipo = 'ambos';
+      if (!novos[t].has(k)) novos[t].set(k, t === 'parceiros' ? { nome, tipo: extra, empresa_id: null } : t === 'servicos' ? { nome, preco: 0, empresa_id: null } : t === 'formas_compra' ? { nome, ativo: true } : { nome, tipo: extra, ativo: true, empresa_id: null });
+      else if (['parceiros', 'categorias'].includes(t) && novos[t].get(k).tipo !== extra) novos[t].get(k).tipo = 'ambos';
     }));
-    const ids = { parceiros: {}, servicos: {}, categorias: {} };
+    const ids = { parceiros: {}, servicos: {}, categorias: {}, formas_compra: {} };
     for (const t of Object.keys(novos)) {
       if (!novos[t].size) continue;
       const criados = await emLotes(t, [...novos[t].values()]);
@@ -1674,7 +1755,8 @@ async function executarImport() {
         ...r.row,
         parceiro_id: r.row.parceiro_id || (r.dados.parceiro ? ids.parceiros[norm(r.dados.parceiro)]?.id : null) || null,
         servico_id: r.row.servico_id || (r.dados.servico ? ids.servicos[norm(r.dados.servico)]?.id : null) || null,
-        categoria: r.row.categoria ? (ids.categorias[norm(r.row.categoria)]?.nome || r.row.categoria) : null
+        categoria: r.row.categoria ? (ids.categorias[norm(r.row.categoria)]?.nome || r.row.categoria) : null,
+        forma_compra: r.row.forma_compra ? (ids.formas_compra[norm(r.row.forma_compra)]?.nome || r.row.forma_compra) : null
       })));
     } else if (lay === 'produtos') {
       const criados = await emLotes('produtos', linhas.map(r => r.row));

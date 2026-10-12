@@ -100,6 +100,15 @@ create table if not exists public.categorias (
   ativo boolean not null default true
 );
 
+-- Formas de compra (lista editável usada nas contas a pagar)
+create table if not exists public.formas_compra (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  nome text not null unique,
+  ativo boolean not null default true
+);
+alter table public.lancamentos add column if not exists forma_compra text;
+
 -- Níveis de acesso: permissoes = {"modulo": ["ver","criar",...], ...}
 create table if not exists public.niveis_acesso (
   id uuid primary key default gen_random_uuid(),
@@ -163,10 +172,10 @@ begin
   if auth.uid() is null or current_setting('app.ignorar_guarda', true) = 'on' then return new; end if;
   if pode(modulo_conta(old.tipo), 'editar') then return new; end if;
   if (new.empresa_id, new.tipo, new.descricao, new.parceiro_id, new.servico_id, new.categoria, new.valor, new.vencimento,
-      new.observacao, new.grupo_parcela, new.parcela_num, new.parcela_total)
+      new.observacao, new.grupo_parcela, new.parcela_num, new.parcela_total, new.forma_compra)
      is distinct from
      (old.empresa_id, old.tipo, old.descricao, old.parceiro_id, old.servico_id, old.categoria, old.valor, old.vencimento,
-      old.observacao, old.grupo_parcela, old.parcela_num, old.parcela_total)
+      old.observacao, old.grupo_parcela, old.parcela_num, old.parcela_total, old.forma_compra)
      or new.status = 'cancelado' or old.status = 'cancelado' then
     raise exception 'Sem permissão para editar este lançamento (apenas registrar pagamento/recebimento).';
   end if;
@@ -183,6 +192,15 @@ begin
   if not pode('categorias', 'editar') then raise exception 'Sem permissão para editar categorias.'; end if;
   perform set_config('app.ignorar_guarda', 'on', true);
   update lancamentos set categoria = novo where categoria = antigo;
+end $$;
+
+-- Renomear forma de compra também atualiza as contas
+create or replace function public.renomear_forma_compra(antigo text, novo text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not pode('categorias', 'editar') then raise exception 'Sem permissão para editar formas de compra.'; end if;
+  perform set_config('app.ignorar_guarda', 'on', true);
+  update lancamentos set forma_compra = novo where forma_compra = antigo;
 end $$;
 
 -- Novo cadastro (pelo app ou pelo painel) ganha um perfil "aguardando liberação".
@@ -234,13 +252,17 @@ select c.nome, c.tipo, c.grupo from (values
 ) as c(nome, tipo, grupo)
 where not exists (select 1 from public.categorias);
 
+insert into public.formas_compra (nome)
+select f.nome from (values ('À vista'), ('A prazo (boleto)'), ('Cartão de crédito'), ('Pix'), ('Transferência')) as f(nome)
+where not exists (select 1 from public.formas_compra);
+
 -- ----------------------------------------------------------
 -- Regras de segurança (RLS): cada usuário só faz o que o nível dele permite
 -- ----------------------------------------------------------
 do $$
 declare t text; pol record;
 begin
-  foreach t in array array['empresas','parceiros','servicos','lancamentos','produtos','movimentos_estoque','categorias','niveis_acesso','perfis'] loop
+  foreach t in array array['empresas','parceiros','servicos','lancamentos','produtos','movimentos_estoque','categorias','formas_compra','niveis_acesso','perfis'] loop
     execute format('alter table public.%I enable row level security', t);
     for pol in select policyname from pg_policies where schemaname = 'public' and tablename = t loop
       execute format('drop policy %I on public.%I', pol.policyname, t);
@@ -288,6 +310,12 @@ create policy sel on public.movimentos_estoque for select to authenticated using
 create policy ins on public.movimentos_estoque for insert to authenticated with check (ve_empresa(empresa_id) and (pode('estoque','movimentar') or pode('estoque','criar')));
 create policy del on public.movimentos_estoque for delete to authenticated using (ve_empresa(empresa_id) and pode('estoque','excluir'));
 
+-- formas de compra: todos os usuários ativos leem; altera quem pode editar categorias
+create policy sel on public.formas_compra for select to authenticated using (usuario_ativo());
+create policy ins on public.formas_compra for insert to authenticated with check (pode('categorias','criar'));
+create policy upd on public.formas_compra for update to authenticated using (pode('categorias','editar'));
+create policy del on public.formas_compra for delete to authenticated using (pode('categorias','excluir'));
+
 -- níveis e perfis: só administradores alteram
 create policy sel on public.niveis_acesso for select to authenticated using (usuario_ativo());
 create policy ins on public.niveis_acesso for insert to authenticated with check (eh_admin());
@@ -304,7 +332,7 @@ create policy del on public.perfis for delete to authenticated using (eh_admin()
 do $$
 declare t text;
 begin
-  foreach t in array array['empresas','parceiros','servicos','lancamentos','produtos','movimentos_estoque','categorias','niveis_acesso','perfis'] loop
+  foreach t in array array['empresas','parceiros','servicos','lancamentos','produtos','movimentos_estoque','categorias','formas_compra','niveis_acesso','perfis'] loop
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
