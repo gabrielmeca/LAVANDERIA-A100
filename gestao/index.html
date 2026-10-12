@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>A100 · Gestão</title>
+<title>Controle Financeiro</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
@@ -370,7 +370,7 @@ function render() {
   const app = document.getElementById('app');
   app.innerHTML = `
     <header class="head">
-      <div class="brand"><h1>A100 · Gestão</h1><p>Contas, clientes, serviços, estoque e análises — várias empresas</p></div>
+      <div class="brand"><h1>Controle Financeiro</h1><p>Contas, clientes, serviços, estoque e análises — várias empresas</p></div>
       <div class="head-right">
         <div class="empresa-pick"><label for="empSel">Empresa</label>
           <select id="empSel" onchange="setEmpresa(this.value)">${empresaOpts(empresaAtual, 'Todas as empresas')}</select></div>
@@ -1142,7 +1142,7 @@ function toast(msg) {
 function renderLogin(msg, criar) {
   document.getElementById('app').innerHTML = `
     <div class="card login">
-      <h1>A100 · Gestão</h1>
+      <h1>Controle Financeiro</h1>
       <p class="card-sub">${criar ? 'Crie seu acesso' : 'Entre para acessar seus dados de qualquer lugar'}</p>
       <form onsubmit="return doLogin(event, ${!!criar})">
         <div class="fld"><label>E-mail</label><input name="email" type="email" required autocomplete="email"></div>

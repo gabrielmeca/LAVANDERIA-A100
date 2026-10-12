@@ -1,4 +1,4 @@
-# A100 · Gestão
+# Controle Financeiro
 
 App web de **contas a pagar e a receber** para várias empresas, com clientes/fornecedores, serviços, **controle de estoque** e **dashboards**. Tudo fica salvo online no Supabase: dá para acessar e alterar de qualquer computador ou celular, e as telas abertas se atualizam sozinhas quando alguém muda algo.
 
