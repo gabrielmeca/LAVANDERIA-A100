@@ -12,7 +12,7 @@ O controle de caixa antigo (`index.html` na raiz) continua funcionando como ante
 | **Dashboard** | Resultado, recebido, pago, a receber/a pagar em aberto (com vencidos), valor em estoque; gráficos de fluxo de caixa mensal, resultado mensal, previsão das próximas 12 semanas, receita por serviço, maiores clientes, despesas por categoria e comparativo entre empresas. |
 | **Contas a pagar / receber** | Lançamentos com cliente/fornecedor, serviço, categoria, parcelas, baixa e estorno. Contas a pagar têm a coluna **Forma de compra**. Filtros por tipo, situação, cliente, serviço, categoria, forma de compra, datas e busca. Exportação em CSV. |
 | **Clientes e fornecedores** | Cadastro com totais recebidos e em aberto. |
-| **Serviços** | Preço padrão e faturamento por serviço. |
+| **Serviços** | **Serviços realizados**: data, cliente, empresa, descrição, valor, técnico, nº do orçamento, laudo (sim/não) e forma de pagamento. Cada serviço lançado gera automaticamente uma **conta a receber** (editar o serviço atualiza a conta; excluir apaga a conta se ainda não foi recebida). Filtros por cliente, técnico, laudo, recebimento e período. Lista editável de **técnicos** e tabela opcional de tipos de serviço com preço. |
 | **Estoque** | Produtos, saldo, mínimo, entradas/saídas/ajustes, geração automática de conta. |
 | **Categorias** | Categorias de receita e despesa, organizadas por grupo, e a lista de **Formas de compra**. Criar, renomear (as contas acompanham), desativar e excluir. |
 | **Importar** | Modelos de planilha (Excel/CSV) para contas, clientes/fornecedores, serviços, produtos, movimentações e categorias. Mostra a conferência linha a linha antes de gravar. |
