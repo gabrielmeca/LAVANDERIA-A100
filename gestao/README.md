@@ -9,26 +9,45 @@ O controle de caixa antigo (`index.html` na raiz) continua funcionando como ante
 
 | Aba | Recursos |
 |---|---|
-| **Dashboard** | Resultado, recebido, pago, a receber/a pagar em aberto (com vencidos), valor em estoque; gráficos de fluxo de caixa mensal, resultado mensal, previsão das próximas 12 semanas, receita por serviço, maiores clientes, despesas por categoria e comparativo entre empresas; contas vencendo em 7 dias; alertas de estoque. Filtro por período. |
-| **Contas a pagar / receber** | Cadastro com cliente/fornecedor, serviço, categoria, vencimento, parcelas (repetição mensal), baixa (pagamento/recebimento) e estorno. Filtros por tipo, situação (pendente, vencido, pago, cancelado), cliente, serviço, categoria, datas (vencimento ou pagamento) e busca. Totais do filtro e exportação em CSV (abre no Excel). |
-| **Clientes e fornecedores** | Cadastro com totais recebidos e em aberto por cliente; botão "Ver contas" já filtra as contas daquele cliente. |
-| **Serviços** | Preço padrão (preenche o valor da conta ao escolher o serviço) e faturamento por serviço. |
-| **Estoque** | Produtos com saldo, mínimo, custo, preço de venda e situação. Entradas, saídas e ajustes de inventário com histórico filtrável. Opção de gerar automaticamente a conta a pagar (compra) ou a receber (venda). |
-| **Empresas e backup** | Cadastro de quantas empresas quiser; backup em JSON (baixar e importar). |
+| **Dashboard** | Resultado, recebido, pago, a receber/a pagar em aberto (com vencidos), valor em estoque; gráficos de fluxo de caixa mensal, resultado mensal, previsão das próximas 12 semanas, receita por serviço, maiores clientes, despesas por categoria e comparativo entre empresas. |
+| **Contas a pagar / receber** | Lançamentos com cliente/fornecedor, serviço, categoria, parcelas, baixa e estorno. Filtros por tipo, situação, cliente, serviço, categoria, datas e busca. Exportação em CSV. |
+| **Clientes e fornecedores** | Cadastro com totais recebidos e em aberto. |
+| **Serviços** | Preço padrão e faturamento por serviço. |
+| **Estoque** | Produtos, saldo, mínimo, entradas/saídas/ajustes, geração automática de conta. |
+| **Categorias** | Categorias de receita e despesa, organizadas por grupo. Criar, renomear (as contas acompanham), desativar e excluir. |
+| **Importar** | Modelos de planilha (Excel/CSV) para contas, clientes/fornecedores, serviços, produtos, movimentações e categorias. Mostra a conferência linha a linha antes de gravar. |
+| **Empresas e backup** | Várias empresas; backup em JSON. |
+| **Usuários e acessos** | (só administradores) Criar usuários, liberar quem se cadastrou e criar **níveis de acesso**. |
 
-O seletor **Empresa** no topo troca entre uma empresa ou **Todas as empresas** (visão consolidada). Clientes e serviços podem ser exclusivos de uma empresa ou compartilhados entre todas.
+### Níveis de acesso
 
-## Configuração (uma vez só)
+Cada nível define, para cada área (Dashboard, Contas a receber, Contas a pagar, Clientes, Serviços, Estoque, Categorias, Empresas, Importar, Backup), o que a pessoa pode fazer: **ver, criar, editar, dar baixa, movimentar, excluir, exportar**. Cada usuário recebe um nível e a lista de empresas que pode acessar. Administradores podem tudo.
 
-O app usa o mesmo projeto Supabase do controle de caixa (as chaves estão no topo do `<script>` em `gestao/index.html`).
+As regras valem **no banco de dados** (Supabase), não só na tela: mesmo que alguém tente burlar o app, o servidor recusa.
 
-1. **Criar as tabelas** — no painel do Supabase: *SQL Editor → New query*, cole todo o conteúdo de [`schema.sql`](schema.sql) e clique em *Run*.
-2. **Criar os usuários** — em *Authentication → Users → Add user*, crie um usuário (e-mail e senha) para cada pessoa que vai usar o app. Também é possível criar pelo botão "Primeiro acesso? Criar conta" na tela de login.
-3. **Fechar novos cadastros (importante)** — depois de criar os usuários, vá em *Authentication → Sign In / Providers* e desative **Allow new users to sign up**. Assim, só quem você cadastrou consegue entrar e ver os dados.
-4. **Publicar** — se o repositório estiver no GitHub Pages, o app fica em `https://<seu-usuario>.github.io/<repositório>/gestao/`.
+Níveis prontos (podem ser editados): *Financeiro*, *Atendimento*, *Estoque* e *Somente consulta*.
 
-Todos os usuários logados enxergam e editam os mesmos dados (todas as empresas).
+## Configuração
+
+### Primeira vez ou atualização
+
+1. No painel do Supabase: **SQL Editor → New query**, cole todo o conteúdo de [`schema.sql`](schema.sql) e clique em **Run**. O script pode ser rodado de novo sempre que o app for atualizado: ele só cria o que falta e não apaga dados.
+   - Quem já tinha usuário antes desta versão vira **administrador** automaticamente.
+   - Num projeto novo, o **primeiro** usuário que se cadastrar vira administrador.
+2. Em **Authentication → Sign In / Providers**:
+   - deixe **Allow new users to sign up** **ligado**: é assim que o app cria usuários. Quem se cadastrar sozinho fica "aguardando liberação" e não vê nada até um administrador liberar;
+   - em **Email**, desligue **Confirm email** se quiser que os usuários criados pelo app entrem na hora, sem precisar clicar no link do e-mail.
+
+### Criar usuários
+
+Entre como administrador → aba **Usuários e acessos** → **+ Novo usuário**: nome, e-mail, senha inicial, nível de acesso e empresas. Cada pessoa pode trocar a própria senha no botão **Minha senha**.
+
+Para tirar o acesso de alguém, use **Desativar**. Para apagar a conta de vez: Supabase → Authentication → Users.
+
+### Publicar
+
+Se o repositório estiver no GitHub Pages, o app fica em `https://<seu-usuario>.github.io/<repositório>/gestao/`.
 
 ## Modo local (teste)
 
-Abra `gestao/index.html?local=1` para testar sem login: os dados ficam só naquele navegador. Use o backup em JSON para levar os dados para o modo online depois (aba *Empresas e backup → Importar backup*).
+Abra `gestao/index.html?local=1` para testar sem login: os dados ficam só naquele navegador e não há controle de usuários. Use o backup em JSON para levar os dados para o modo online depois.
