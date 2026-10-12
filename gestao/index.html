@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root {
     color-scheme: light;
@@ -109,6 +110,9 @@
   .btn.ghost { background: transparent; color: var(--ink-soft); border: 1px solid var(--line); }
   .btn.red { background: var(--red); }
   .btn.sm { padding: 6px 10px; font-size: 12.5px; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+  .perm-tbl td, .perm-tbl th { padding: 6px 6px; }
+  .perm-tbl input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--teal); }
   .ibtn { border: none; background: none; color: var(--ink-soft); cursor: pointer; padding: 5px 7px; border-radius: 7px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
   .ibtn:hover { background: var(--teal-soft); color: var(--teal-dark); }
   .ibtn.danger:hover { background: var(--red-soft); color: var(--red); }
@@ -178,7 +182,25 @@
 const SUPABASE_URL = "https://rqyxigyabvpfovhhgetm.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_mOidO636lc40mqWAONsn9A_Enr8NDRF";
 
-const TABLES = ['empresas', 'parceiros', 'servicos', 'lancamentos', 'produtos', 'movimentos_estoque'];
+const TABLES = ['empresas', 'parceiros', 'servicos', 'lancamentos', 'produtos', 'movimentos_estoque', 'categorias', 'niveis_acesso', 'perfis'];
+// tabelas de dados de negócio (as de usuários/níveis só existem online)
+const DATA_TABLES = ['empresas', 'parceiros', 'servicos', 'lancamentos', 'produtos', 'movimentos_estoque', 'categorias'];
+
+// ---------- níveis de acesso: o que cada módulo permite ----------
+const MODULOS = [
+  ['dashboard', 'Dashboard', ['ver']],
+  ['contas_receber', 'Contas a receber', ['ver', 'criar', 'editar', 'baixar', 'excluir', 'exportar']],
+  ['contas_pagar', 'Contas a pagar', ['ver', 'criar', 'editar', 'baixar', 'excluir', 'exportar']],
+  ['parceiros', 'Clientes e fornecedores', ['ver', 'criar', 'editar', 'excluir']],
+  ['servicos', 'Serviços', ['ver', 'criar', 'editar', 'excluir']],
+  ['estoque', 'Estoque', ['ver', 'criar', 'editar', 'movimentar', 'excluir']],
+  ['categorias', 'Categorias', ['ver', 'criar', 'editar', 'excluir']],
+  ['empresas', 'Empresas', ['ver', 'criar', 'editar', 'excluir']],
+  ['importar', 'Importar dados', ['usar']],
+  ['backup', 'Backup', ['exportar', 'importar']]
+];
+const ACOES = { ver: 'Ver', criar: 'Criar', editar: 'Editar', baixar: 'Dar baixa', excluir: 'Excluir', exportar: 'Exportar', movimentar: 'Movimentar', usar: 'Usar', importar: 'Importar' };
+const ACOES_ORDEM = ['ver', 'criar', 'editar', 'baixar', 'movimentar', 'excluir', 'exportar', 'importar', 'usar'];
 const FORMAS_PAGAMENTO = ['Pix', 'Dinheiro', 'Cartão de crédito', 'Cartão de débito', 'Boleto', 'Transferência', 'Outro'];
 
 // ---------- utilidades ----------
@@ -248,7 +270,7 @@ const LocalDB = {
     const db = this.read();
     TABLES.forEach(x => db[x] = db[x] || []);
     db[t] = db[t].filter(r => r.id !== id);
-    if (t === 'empresas') ['parceiros', 'servicos', 'lancamentos', 'produtos', 'movimentos_estoque'].forEach(x => db[x] = db[x].filter(r => r.empresa_id !== id));
+    if (t === 'empresas') ['parceiros', 'servicos', 'lancamentos', 'produtos', 'movimentos_estoque', 'categorias'].forEach(x => db[x] = db[x].filter(r => r.empresa_id !== id));
     if (t === 'produtos') db.movimentos_estoque = db.movimentos_estoque.filter(r => r.produto_id !== id);
     if (t === 'parceiros') db.lancamentos = db.lancamentos.map(r => r.parceiro_id === id ? { ...r, parceiro_id: null } : r);
     if (t === 'servicos') db.lancamentos = db.lancamentos.map(r => r.servico_id === id ? { ...r, servico_id: null } : r);
@@ -270,19 +292,78 @@ const RemoteDB = {
     return out;
   },
   async insert(t, rows) { const { data, error } = await sb.from(t).insert(rows).select(); if (error) throw error; return data; },
-  async update(t, id, patch) { const { data, error } = await sb.from(t).update(patch).eq('id', id).select().single(); if (error) throw error; return data; },
-  async remove(t, id) { const { error } = await sb.from(t).delete().eq('id', id); if (error) throw error; }
+  async update(t, id, patch) {
+    const { data, error } = await sb.from(t).update(patch).eq(t === 'perfis' ? 'user_id' : 'id', id).select();
+    if (error) throw error;
+    if (!data.length) throw new Error('Sem permissão para alterar este registro.');
+    return data[0];
+  },
+  async remove(t, id) {
+    const { data, error } = await sb.from(t).delete().eq(t === 'perfis' ? 'user_id' : 'id', id).select();
+    if (error) throw error;
+    if (!data.length) throw new Error('Sem permissão para excluir este registro.');
+  },
+  async rpc(fn, args) { const { error } = await sb.rpc(fn, args); if (error) throw error; }
 };
 function DB() { return mode === 'local' ? LocalDB : RemoteDB; }
 
 // dados em memória
 const D = {}; TABLES.forEach(t => D[t] = []);
 const byId = t => id => D[t].find(r => r.id === id);
-const empresa = byId('empresas'), parceiro = byId('parceiros'), servico = byId('servicos'), produto = byId('produtos'), lancamento = byId('lancamentos');
+const empresa = byId('empresas'), parceiro = byId('parceiros'), servico = byId('servicos'), produto = byId('produtos'), lancamento = byId('lancamentos'), categoria = byId('categorias'), nivel = byId('niveis_acesso');
 
 async function loadAll() {
-  const res = await Promise.all(TABLES.map(t => DB().list(t)));
-  TABLES.forEach((t, i) => D[t] = res[i]);
+  const tabs = mode === 'local' ? DATA_TABLES : TABLES;
+  const res = await Promise.all(tabs.map(t => DB().list(t)));
+  tabs.forEach((t, i) => D[t] = res[i]);
+  if (mode === 'local' && !D.categorias.length && !lsGet('cats-seed')) {
+    // mesmas categorias iniciais do schema.sql
+    lsSet('cats-seed', '1');
+    D.categorias = await LocalDB.insert('categorias', CATEGORIAS_PADRAO.map(([nome, tipo, grupo]) => ({ nome, tipo, grupo, ativo: true, empresa_id: null })));
+  }
+  if (mode === 'supabase') {
+    meuPerfil = D.perfis.find(p => p.user_id === user?.id) || null;
+    minhasPerms = (meuPerfil && nivel(meuPerfil.nivel_id)?.permissoes) || {};
+    // o banco já filtra pelas regras de segurança; aqui repete o filtro por garantia
+    if (!souAdmin()) {
+      const emps = meuPerfil?.empresas?.length ? new Set(meuPerfil.empresas) : null;
+      const okEmp = id => !emps || !id || emps.has(id);
+      D.empresas = D.empresas.filter(e => okEmp(e.id));
+      ['parceiros', 'servicos', 'categorias', 'lancamentos', 'produtos', 'movimentos_estoque'].forEach(t => D[t] = D[t].filter(r => okEmp(r.empresa_id)));
+      D.lancamentos = D.lancamentos.filter(l => canConta(l.tipo, 'ver'));
+      if (!can('estoque', 'ver')) { D.produtos = []; D.movimentos_estoque = []; }
+    }
+  }
+}
+const CATEGORIAS_PADRAO = [
+  ['Lavagem', 'receber', 'Receitas'], ['Secagem', 'receber', 'Receitas'], ['Combos', 'receber', 'Receitas'], ['Lavanderia assistida', 'receber', 'Receitas'],
+  ['Venda de produtos', 'receber', 'Receitas'], ['Serviços', 'receber', 'Receitas'], ['Outras receitas', 'receber', 'Receitas'],
+  ['Produtos químicos', 'pagar', 'Insumos'], ['Essências', 'pagar', 'Insumos'], ['Embalagens', 'pagar', 'Insumos'], ['Compras de estoque', 'pagar', 'Insumos'],
+  ['Aluguel', 'pagar', 'Despesas operacionais'], ['Água', 'pagar', 'Despesas operacionais'], ['Energia', 'pagar', 'Despesas operacionais'],
+  ['Internet', 'pagar', 'Despesas operacionais'], ['Contabilidade', 'pagar', 'Despesas operacionais'], ['Manutenção', 'pagar', 'Despesas operacionais'],
+  ['Salários', 'pagar', 'Pessoal'], ['Simples Nacional', 'pagar', 'Tributos'], ['Taxas municipais', 'pagar', 'Tributos'],
+  ['Tarifas bancárias', 'pagar', 'Despesas financeiras'], ['Juros', 'pagar', 'Despesas financeiras'],
+  ['Parcela de máquinas', 'pagar', 'Investimentos'], ['Novos equipamentos', 'pagar', 'Investimentos'], ['Outras despesas', 'pagar', 'Outras']
+];
+
+// ---------- permissões do usuário logado ----------
+let meuPerfil = null, minhasPerms = {};
+function souAdmin() { return mode === 'local' || !!(meuPerfil?.ativo && meuPerfil?.admin); }
+function can(mod, acao) {
+  if (souAdmin()) return true;
+  return !!(meuPerfil?.ativo && Array.isArray(minhasPerms[mod]) && minhasPerms[mod].includes(acao));
+}
+function modConta(tipo) { return tipo === 'pagar' ? 'contas_pagar' : 'contas_receber'; }
+function canConta(tipo, acao) { return can(modConta(tipo), acao); }
+function tiposContaPermitidos(acao) { return ['receber', 'pagar'].filter(t => canConta(t, acao)); }
+
+// mensagens de erro do banco em português
+function msgErro(e) {
+  const m = String(e?.message || e || '');
+  if (/row-level security|permission denied|Sem permissão/i.test(m)) return m.startsWith('Sem permissão') ? m : 'Você não tem permissão para esta ação.';
+  if (/duplicate key/i.test(m)) return 'Já existe um registro com esse nome.';
+  if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
+  return m;
 }
 
 function isMissingTable(e) {
@@ -303,7 +384,7 @@ async function run(fn, okMsg) {
   } catch (e) {
     console.error(e);
     if (mode !== 'local') syncState = 'err';
-    alert('Não foi possível salvar: ' + (e.message || e));
+    alert('Não foi possível salvar: ' + msgErro(e));
     renderHeaderStatus();
     return false;
   }
@@ -358,14 +439,37 @@ function opts(list, sel, placeholder) {
 }
 function empresaOpts(sel, placeholder) { return opts(D.empresas.map(e => [e.id, e.nome]), sel, placeholder); }
 function nomeEmpresa(id) { return empresa(id)?.nome || '—'; }
-function categorias() { return [...new Set(D.lancamentos.map(l => l.categoria).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')); }
+function categorias() { return [...new Set([...D.categorias.map(c => c.nome), ...D.lancamentos.map(l => l.categoria)].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')); }
+// lista de categorias do tipo da conta, agrupadas por grupo
+function categoriaOptsFor(emp, tipo, sel) {
+  const list = escopoCompart(D.categorias, emp).filter(c => c.ativo !== false && (c.tipo === 'ambos' || c.tipo === tipo))
+    .sort((a, b) => (a.grupo || '').localeCompare(b.grupo || '', 'pt-BR') || a.nome.localeCompare(b.nome, 'pt-BR'));
+  const grupos = new Map();
+  list.forEach(c => { const g = c.grupo || 'Sem grupo'; if (!grupos.has(g)) grupos.set(g, []); grupos.get(g).push(c.nome); });
+  let html = `<option value="">— sem categoria —</option>`;
+  if (sel && !list.some(c => c.nome === sel)) html += `<option value="${esc(sel)}" selected>${esc(sel)}</option>`;
+  for (const [g, nomes] of grupos) html += `<optgroup label="${esc(g)}">${nomes.map(n => `<option value="${esc(n)}" ${n === sel ? 'selected' : ''}>${esc(n)}</option>`).join('')}</optgroup>`;
+  return html;
+}
 
 // ==========================================================
 // RENDERIZAÇÃO
 // ==========================================================
-const TABS = [['dashboard', 'Dashboard'], ['contas', 'Contas a pagar / receber'], ['parceiros', 'Clientes e fornecedores'], ['servicos', 'Serviços'], ['estoque', 'Estoque'], ['empresas', 'Empresas e backup']];
+const TABS = [
+  ['dashboard', 'Dashboard', () => can('dashboard', 'ver')],
+  ['contas', 'Contas a pagar / receber', () => tiposContaPermitidos('ver').length > 0],
+  ['parceiros', 'Clientes e fornecedores', () => can('parceiros', 'ver')],
+  ['servicos', 'Serviços', () => can('servicos', 'ver')],
+  ['estoque', 'Estoque', () => can('estoque', 'ver')],
+  ['categorias', 'Categorias', () => can('categorias', 'ver')],
+  ['importar', 'Importar', () => can('importar', 'usar')],
+  ['empresas', 'Empresas e backup', () => can('empresas', 'ver') || can('backup', 'exportar') || can('backup', 'importar')],
+  ['usuarios', 'Usuários e acessos', () => souAdmin()]
+];
+function tabsVisiveis() { return TABS.filter(t => t[2]()); }
 
 function render() {
+  if (mode === 'supabase' && !meuPerfil?.ativo) { renderPendente(); return; }
   if (empresaAtual && !empresa(empresaAtual)) empresaAtual = '';
   const app = document.getElementById('app');
   app.innerHTML = `
@@ -375,11 +479,13 @@ function render() {
         <div class="empresa-pick"><label for="empSel">Empresa</label>
           <select id="empSel" onchange="setEmpresa(this.value)">${empresaOpts(empresaAtual, 'Todas as empresas')}</select></div>
         <span class="chip" id="syncChip"></span>
-        ${mode === 'supabase' ? `<button class="btn ghost sm" onclick="logout()" title="${esc(user?.email)}">Sair</button>` : ''}
+        ${mode === 'supabase' ? `<span class="chip" title="${esc(user?.email)}">👤 ${esc(meuPerfil?.nome || user?.email)}${souAdmin() ? ' · admin' : ''}</span>
+          <button class="btn ghost sm" onclick="formMinhaSenha()">Minha senha</button>
+          <button class="btn ghost sm" onclick="logout()">Sair</button>` : ''}
       </div>
     </header>
     ${mode === 'local' ? `<div class="banner amber"><b>Modo local:</b> os dados ficam só neste navegador. Para salvar online e acessar de qualquer lugar, configure o Supabase (veja <code>gestao/README.md</code>).</div>` : ''}
-    <nav class="nav">${TABS.map(([k, l]) => `<button class="${tab === k ? 'active' : ''}" onclick="setTab('${k}')">${l}</button>`).join('')}</nav>
+    <nav class="nav">${tabsVisiveis().map(([k, l]) => `<button class="${tab === k ? 'active' : ''}" onclick="setTab('${k}')">${l}</button>`).join('')}</nav>
     <main id="tabBody"></main>`;
   renderHeaderStatus();
   renderTab();
@@ -396,13 +502,21 @@ function renderTab() {
   Object.values(charts).forEach(c => c.destroy());
   for (const k in charts) delete charts[k];
   const body = document.getElementById('tabBody'); if (!body) return;
-  if (!D.empresas.length && tab !== 'empresas') {
-    body.innerHTML = `<div class="card"><h2 class="card-title">Comece cadastrando uma empresa</h2>
-      <p class="card-sub">Todas as contas, produtos e relatórios ficam ligados a uma empresa. Você pode cadastrar quantas quiser e alternar entre elas no topo da tela.</p>
-      <button class="btn" onclick="formEmpresa()">+ Nova empresa</button></div>`;
+  const vis = tabsVisiveis();
+  if (!vis.length) {
+    body.innerHTML = `<div class="card"><h2 class="card-title">Nenhuma área liberada</h2><p class="card-sub">Seu nível de acesso ainda não tem permissões. Fale com o administrador.</p></div>`;
     return;
   }
-  ({ dashboard: tabDashboard, contas: tabContas, parceiros: tabParceiros, servicos: tabServicos, estoque: tabEstoque, empresas: tabEmpresas }[tab] || tabDashboard)(body);
+  if (!vis.some(t => t[0] === tab)) { tab = vis[0][0]; document.querySelectorAll('.nav button').forEach((b, i) => b.classList.toggle('active', vis[i][0] === tab)); }
+  if (!D.empresas.length && !['empresas', 'usuarios', 'categorias'].includes(tab)) {
+    body.innerHTML = can('empresas', 'criar')
+      ? `<div class="card"><h2 class="card-title">Comece cadastrando uma empresa</h2>
+      <p class="card-sub">Todas as contas, produtos e relatórios ficam ligados a uma empresa. Você pode cadastrar quantas quiser e alternar entre elas no topo da tela.</p>
+      <button class="btn" onclick="formEmpresa()">+ Nova empresa</button></div>`
+      : `<div class="card"><h2 class="card-title">Nenhuma empresa liberada</h2><p class="card-sub">Peça ao administrador para liberar o acesso a pelo menos uma empresa.</p></div>`;
+    return;
+  }
+  ({ dashboard: tabDashboard, contas: tabContas, parceiros: tabParceiros, servicos: tabServicos, estoque: tabEstoque, categorias: tabCategorias, importar: tabImportar, empresas: tabEmpresas, usuarios: tabUsuarios }[tab] || tabDashboard)(body);
 }
 
 function presetButtons(state, fnName) {
@@ -580,7 +694,7 @@ function tabContas(body) {
   const servs = escopoCompart(D.servicos).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   body.innerHTML = `
     <div class="toolbar"><h2 style="font-size:18px">Contas a pagar e a receber</h2>
-      <div class="actions"><button class="btn ghost" onclick="exportCSV()">Exportar CSV</button><button class="btn" onclick="formConta(null,'receber')">+ A receber</button><button class="btn red" onclick="formConta(null,'pagar')">+ A pagar</button></div></div>
+      <div class="actions">${tiposContaPermitidos('exportar').length ? `<button class="btn ghost" onclick="exportCSV()">Exportar CSV</button>` : ''}${canConta('receber', 'criar') ? `<button class="btn" onclick="formConta(null,'receber')">+ A receber</button>` : ''}${canConta('pagar', 'criar') ? `<button class="btn red" onclick="formConta(null,'pagar')">+ A pagar</button>` : ''}</div></div>
     <div class="filters">
       <div class="f wide"><label>Buscar</label><input type="search" placeholder="Descrição, cliente, serviço, categoria…" value="${esc(F.q)}" oninput="setF('q', this.value)"></div>
       <div class="f"><label>Tipo</label><select onchange="setF('tipo', this.value)">${opts([['receber', 'A receber'], ['pagar', 'A pagar']], F.tipo, 'Todos')}</select></div>
@@ -619,10 +733,10 @@ function renderContasLista() {
           <td class="num ${l.tipo === 'pagar' ? 'val-out' : 'val-in'}">${brl(valorReal(l))}</td>
           <td><span class="tag ${st}">${STATUS_LABEL[st]}</span></td>
           <td class="acts">
-            ${l.status === 'pendente' ? `<button class="ibtn" onclick="formBaixa('${l.id}')">${l.tipo === 'pagar' ? 'Pagar' : 'Receber'}</button>` : ''}
-            ${l.status === 'pago' ? `<button class="ibtn" onclick="estornar('${l.id}')">Estornar</button>` : ''}
-            <button class="ibtn" onclick="formConta('${l.id}')">Editar</button>
-            <button class="ibtn danger" onclick="excluirConta('${l.id}')">Excluir</button>
+            ${l.status === 'pendente' && podeBaixar(l.tipo) ? `<button class="ibtn" onclick="formBaixa('${l.id}')">${l.tipo === 'pagar' ? 'Pagar' : 'Receber'}</button>` : ''}
+            ${l.status === 'pago' && podeBaixar(l.tipo) ? `<button class="ibtn" onclick="estornar('${l.id}')">Estornar</button>` : ''}
+            ${canConta(l.tipo, 'editar') ? `<button class="ibtn" onclick="formConta('${l.id}')">Editar</button>` : ''}
+            ${canConta(l.tipo, 'excluir') ? `<button class="ibtn danger" onclick="excluirConta('${l.id}')">Excluir</button>` : ''}
           </td></tr>`;
       }).join('')}</tbody>
     </table></div>
@@ -634,8 +748,9 @@ function renderContasLista() {
     </div>` : '<p class="empty">Nenhum lançamento encontrado com esses filtros.</p>';
 }
 
+function podeBaixar(tipo) { return canConta(tipo, 'baixar') || canConta(tipo, 'editar'); }
 function exportCSV() {
-  const rows = filtrarContas();
+  const rows = filtrarContas().filter(l => canConta(l.tipo, 'exportar'));
   const head = ['Empresa', 'Tipo', 'Descrição', 'Cliente/Fornecedor', 'Serviço', 'Categoria', 'Vencimento', 'Valor', 'Situação', 'Pagamento', 'Valor pago', 'Forma', 'Observação'];
   const cell = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
   const money = v => v == null || v === '' ? '' : num(v).toFixed(2).replace('.', ',');
@@ -662,6 +777,7 @@ function refreshContaSelects() {
   const emp = f.empresa_id.value, tipo = f.tipo.value;
   f.parceiro_id.innerHTML = parceiroOptsFor(emp, f.parceiro_id.value, tipo);
   f.servico_id.innerHTML = servicoOptsFor(emp, f.servico_id.value);
+  f.categoria.innerHTML = categoriaOptsFor(emp, tipo, f.categoria.value);
 }
 function onServicoPick(sel) {
   const s = servico(sel.value), f = sel.form;
@@ -678,12 +794,12 @@ function formConta(id, tipoNovo) {
   openModal(l ? 'Editar lançamento' : (tipo === 'pagar' ? 'Nova conta a pagar' : 'Nova conta a receber'), `
     <form id="mform" onsubmit="return salvarConta(event, ${l ? `'${l.id}'` : 'null'})">
       <div class="form-grid">
-        <div class="fld"><label>Tipo</label><select name="tipo" onchange="refreshContaSelects()">${opts([['receber', 'A receber'], ['pagar', 'A pagar']], tipo)}</select></div>
+        <div class="fld"><label>Tipo</label><select name="tipo" onchange="refreshContaSelects()">${opts([['receber', 'A receber'], ['pagar', 'A pagar']].filter(([t]) => t === tipo || canConta(t, l ? 'editar' : 'criar')), tipo)}</select></div>
         <div class="fld"><label>Empresa</label><select name="empresa_id" required onchange="refreshContaSelects()">${empresaOpts(emp)}</select></div>
         <div class="fld full"><label>Descrição</label><input name="descricao" required maxlength="200" value="${esc(l?.descricao)}" placeholder="Ex.: Lavagem de enxoval — hotel"></div>
         <div class="fld"><label>Cliente / fornecedor</label><select name="parceiro_id">${parceiroOptsFor(emp, l?.parceiro_id, tipo)}</select></div>
         <div class="fld"><label>Serviço</label><select name="servico_id" onchange="onServicoPick(this)">${servicoOptsFor(emp, l?.servico_id)}</select></div>
-        <div class="fld"><label>Categoria</label><input name="categoria" list="catList" value="${esc(l?.categoria)}" placeholder="Ex.: Energia, Aluguel, Vendas"><datalist id="catList">${categorias().map(c => `<option value="${esc(c)}">`).join('')}</datalist></div>
+        <div class="fld"><label>Categoria</label><select name="categoria">${categoriaOptsFor(emp, tipo, l?.categoria)}</select></div>
         <div class="fld"><label>Valor (R$)</label><input name="valor" type="number" step="0.01" min="0" required value="${l ? num(l.valor).toFixed(2) : ''}"></div>
         <div class="fld"><label>Vencimento</label><input name="vencimento" type="date" required value="${l?.vencimento || today()}"></div>
         ${l ? '' : `<div class="fld"><label>Parcelas / repetições mensais</label><input name="parcelas" type="number" min="1" max="120" value="1"></div>`}
@@ -771,7 +887,7 @@ async function excluirConta(id) {
 function setPF(k, v) { PF[k] = v; renderParceirosLista(); }
 function tabParceiros(body) {
   body.innerHTML = `
-    <div class="toolbar"><h2 style="font-size:18px">Clientes e fornecedores</h2><div class="actions"><button class="btn" onclick="formParceiro()">+ Novo cadastro</button></div></div>
+    <div class="toolbar"><h2 style="font-size:18px">Clientes e fornecedores</h2><div class="actions">${can('parceiros', 'criar') ? `<button class="btn" onclick="formParceiro()">+ Novo cadastro</button>` : ''}</div></div>
     <div class="filters">
       <div class="f wide"><label>Buscar</label><input type="search" value="${esc(PF.q)}" placeholder="Nome, documento, telefone, e-mail…" oninput="setPF('q', this.value)"></div>
       <div class="f"><label>Tipo</label><select onchange="setPF('tipo', this.value)">${opts(Object.entries(TIPO_PARC), PF.tipo, 'Todos')}</select></div>
@@ -796,7 +912,7 @@ function renderParceirosLista() {
         <td class="hide-sm">${esc(p.telefone || '')}${p.email ? `<div class="muted">${esc(p.email)}</div>` : ''}</td>
         <td class="hide-sm">${p.empresa_id ? esc(nomeEmpresa(p.empresa_id)) : '<span class="muted">Todas</span>'}</td>
         <td class="num">${brl(rec)}</td><td class="num val-in">${arec ? brl(arec) : '—'}</td><td class="num val-out">${apag ? brl(apag) : '—'}</td>
-        <td class="acts"><button class="ibtn" onclick="verContasDe('parceiro','${p.id}')">Ver contas</button><button class="ibtn" onclick="formParceiro('${p.id}')">Editar</button><button class="ibtn danger" onclick="excluir('parceiros','${p.id}','${esc(p.nome).replace(/'/g, '')}')">Excluir</button></td></tr>`;
+        <td class="acts">${tiposContaPermitidos('ver').length ? `<button class="ibtn" onclick="verContasDe('parceiro','${p.id}')">Ver contas</button>` : ''}${can('parceiros', 'editar') ? `<button class="ibtn" onclick="formParceiro('${p.id}')">Editar</button>` : ''}${can('parceiros', 'excluir') ? `<button class="ibtn danger" onclick="excluir('parceiros','${p.id}','${esc(p.nome).replace(/'/g, '')}')">Excluir</button>` : ''}</td></tr>`;
     }).join('')}</tbody></table></div>` : '<p class="empty">Nenhum cadastro encontrado.</p>';
 }
 function formParceiro(id) {
@@ -840,7 +956,7 @@ function excluir(table, id, nome) {
 // ---------------- SERVIÇOS ----------------
 function tabServicos(body) {
   body.innerHTML = `
-    <div class="toolbar"><h2 style="font-size:18px">Serviços</h2><div class="actions"><button class="btn" onclick="formServico()">+ Novo serviço</button></div></div>
+    <div class="toolbar"><h2 style="font-size:18px">Serviços</h2><div class="actions">${can('servicos', 'criar') ? `<button class="btn" onclick="formServico()">+ Novo serviço</button>` : ''}</div></div>
     <div class="filters"><div class="f wide"><label>Buscar</label><input type="search" value="${esc(SF.q)}" oninput="SF.q=this.value; renderServicosLista()"></div></div>
     <div class="card"><div id="servLista"></div></div>`;
   renderServicosLista();
@@ -859,7 +975,7 @@ function renderServicosLista() {
       return `<tr><td><b>${esc(s.nome)}</b>${s.descricao ? `<div class="muted">${esc(s.descricao)}</div>` : ''}</td>
         <td class="hide-sm">${s.empresa_id ? esc(nomeEmpresa(s.empresa_id)) : '<span class="muted">Todas</span>'}</td>
         <td class="num">${brl(s.preco)}</td><td class="num">${mine.length}</td><td class="num">${brl(rec)}</td><td class="num val-in">${ab ? brl(ab) : '—'}</td>
-        <td class="acts"><button class="ibtn" onclick="verContasDe('servico','${s.id}')">Ver contas</button><button class="ibtn" onclick="formServico('${s.id}')">Editar</button><button class="ibtn danger" onclick="excluir('servicos','${s.id}','${esc(s.nome).replace(/'/g, '')}')">Excluir</button></td></tr>`;
+        <td class="acts">${tiposContaPermitidos('ver').length ? `<button class="ibtn" onclick="verContasDe('servico','${s.id}')">Ver contas</button>` : ''}${can('servicos', 'editar') ? `<button class="ibtn" onclick="formServico('${s.id}')">Editar</button>` : ''}${can('servicos', 'excluir') ? `<button class="ibtn danger" onclick="excluir('servicos','${s.id}','${esc(s.nome).replace(/'/g, '')}')">Excluir</button>` : ''}</td></tr>`;
     }).join('')}</tbody></table></div>` : '<p class="empty">Nenhum serviço cadastrado.</p>';
 }
 function formServico(id) {
@@ -883,7 +999,7 @@ function tabEstoque(body) {
   const prods = escopo(D.produtos).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   body.innerHTML = `
     <div class="toolbar"><h2 style="font-size:18px">Estoque</h2>
-      <div class="actions"><button class="btn ghost" onclick="formMov(null,'saida')">− Saída</button><button class="btn ghost" onclick="formMov(null,'entrada')">+ Entrada</button><button class="btn" onclick="formProduto()">+ Novo produto</button></div></div>
+      <div class="actions">${can('estoque', 'movimentar') ? `<button class="btn ghost" onclick="formMov(null,'saida')">− Saída</button><button class="btn ghost" onclick="formMov(null,'entrada')">+ Entrada</button>` : ''}${can('estoque', 'criar') ? `<button class="btn" onclick="formProduto()">+ Novo produto</button>` : ''}</div></div>
     <div id="estKpis"></div>
     <div class="filters">
       <div class="f wide"><label>Buscar produto</label><input type="search" value="${esc(EF.q)}" placeholder="Nome ou código" oninput="setEF('q', this.value)"></div>
@@ -922,7 +1038,7 @@ function renderEstoqueListas() {
       return `<tr><td><b>${esc(p.nome)}</b>${p.sku ? `<div class="muted">${esc(p.sku)}</div>` : ''}</td>${multi ? `<td>${esc(nomeEmpresa(p.empresa_id))}</td>` : ''}
         <td class="num"><b>${qty(s)}</b> ${esc(p.unidade)}</td><td class="num hide-sm">${qty(p.estoque_minimo)}</td><td class="num hide-sm">${brl(p.custo)}</td><td class="num hide-sm">${brl(p.preco_venda)}</td>
         <td class="num">${brl(Math.max(0, s) * num(p.custo))}</td><td><span class="tag ${sit}">${SIT_LABEL[sit]}</span></td>
-        <td class="acts"><button class="ibtn" onclick="formMov('${p.id}','entrada')">+ Entrada</button><button class="ibtn" onclick="formMov('${p.id}','saida')">− Saída</button><button class="ibtn" onclick="formProduto('${p.id}')">Editar</button><button class="ibtn danger" onclick="excluir('produtos','${p.id}','${esc(p.nome).replace(/'/g, '')}')">Excluir</button></td></tr>`;
+        <td class="acts">${can('estoque', 'movimentar') ? `<button class="ibtn" onclick="formMov('${p.id}','entrada')">+ Entrada</button><button class="ibtn" onclick="formMov('${p.id}','saida')">− Saída</button>` : ''}${can('estoque', 'editar') ? `<button class="ibtn" onclick="formProduto('${p.id}')">Editar</button>` : ''}${can('estoque', 'excluir') ? `<button class="ibtn danger" onclick="excluir('produtos','${p.id}','${esc(p.nome).replace(/'/g, '')}')">Excluir</button>` : ''}</td></tr>`;
     }).join('')}</tbody></table></div>` : '<p class="empty">Nenhum produto encontrado.</p>';
 
   const movs = escopo(D.movimentos_estoque).filter(m => (!EF.movProduto || m.produto_id === EF.movProduto) && (!EF.movTipo || m.tipo === EF.movTipo) && ((!EF.de && !EF.ate) || inPeriod(m.data, EF.de, EF.ate)))
@@ -936,7 +1052,7 @@ function renderEstoqueListas() {
       return `<tr><td>${fmtDate(m.data)}</td><td>${esc(p?.nome || '—')}</td><td><span class="tag ${m.tipo}">${{ entrada: 'Entrada', saida: 'Saída', ajuste: 'Ajuste' }[m.tipo]}</span></td>
         <td class="num ${sinal < 0 ? 'val-out' : 'val-in'}">${sinal > 0 ? '+' : ''}${qty(sinal)} ${esc(p?.unidade || '')}</td><td class="num hide-sm">${brl(m.valor_unitario)}</td><td class="num">${brl(Math.abs(sinal) * num(m.valor_unitario))}</td>
         <td class="hide-sm">${esc(m.observacao || '')}${m.lancamento_id && lancamento(m.lancamento_id) ? ' <span class="muted">· conta gerada</span>' : ''}</td>
-        <td class="acts"><button class="ibtn danger" onclick="excluirMov('${m.id}')">Excluir</button></td></tr>`;
+        <td class="acts">${can('estoque', 'excluir') ? `<button class="ibtn danger" onclick="excluirMov('${m.id}')">Excluir</button>` : ''}</td></tr>`;
     }).join('')}</tbody></table></div>${movs.length > 300 ? `<p class="muted">Mostrando as 300 mais recentes de ${movs.length}. Use os filtros para refinar.</p>` : ''}` : '<p class="empty">Nenhuma movimentação no filtro.</p>';
 }
 
@@ -975,7 +1091,7 @@ function onMovChange() {
   const lbl = document.getElementById('gerarLbl');
   if (p && !f.valor_unitario.dataset.touched) f.valor_unitario.value = num(tipo === 'saida' ? p.preco_venda : p.custo).toFixed(2);
   if (lbl) lbl.textContent = tipo === 'entrada' ? 'Gerar conta a pagar desta compra' : tipo === 'saida' ? 'Gerar conta a receber desta venda' : '';
-  toggleBox('gerarWrap', tipo !== 'ajuste');
+  toggleBox('gerarWrap', tipo !== 'ajuste' && canConta(tipo === 'entrada' ? 'pagar' : 'receber', 'criar'));
   document.getElementById('qtdHint').textContent = tipo === 'ajuste' ? 'Use valor negativo para baixar (ex.: −2 por perda) e positivo para somar.' : (p ? `Saldo atual: ${qty(saldoProduto(p.id))} ${p.unidade}` : '');
   f.quantidade.min = tipo === 'ajuste' ? '' : '0.001';
   if (p) {
@@ -1033,7 +1149,7 @@ function salvarMov(ev) {
     }
     await DB().insert('movimentos_estoque', [{ empresa_id: p.empresa_id, produto_id: p.id, tipo: v.tipo, quantidade: q, valor_unitario: vu, data: v.data, observacao: v.observacao.trim() || null, lancamento_id: lancId }]);
     // mantém o custo do produto atualizado com o último custo de compra
-    if (v.tipo === 'entrada' && vu > 0 && vu !== num(p.custo)) await DB().update('produtos', p.id, { custo: vu });
+    if (v.tipo === 'entrada' && vu > 0 && vu !== num(p.custo)) await DB().update('produtos', p.id, { custo: vu }).catch(() => {});
   }, 'Movimentação registrada');
   return false;
 }
@@ -1048,21 +1164,21 @@ function excluirMov(id) {
 // ---------------- EMPRESAS / BACKUP ----------------
 function tabEmpresas(body) {
   body.innerHTML = `
-    <div class="toolbar"><h2 style="font-size:18px">Empresas</h2><div class="actions"><button class="btn" onclick="formEmpresa()">+ Nova empresa</button></div></div>
+    ${can('empresas', 'ver') ? `<div class="toolbar"><h2 style="font-size:18px">Empresas</h2><div class="actions">${can('empresas', 'criar') ? `<button class="btn" onclick="formEmpresa()">+ Nova empresa</button>` : ''}</div></div>
     <div class="card">${D.empresas.length ? `<div class="tbl-wrap"><table>
       <thead><tr><th>Empresa</th><th class="hide-sm">CNPJ</th><th class="num">Contas</th><th class="num">Produtos</th><th class="num">Em aberto (receber − pagar)</th><th></th></tr></thead>
       <tbody>${D.empresas.map(e => {
         const L = D.lancamentos.filter(l => l.empresa_id === e.id);
         const ab = L.filter(l => l.status === 'pendente').reduce((s, l) => s + (l.tipo === 'receber' ? 1 : -1) * num(l.valor), 0);
         return `<tr><td><b>${esc(e.nome)}</b></td><td class="hide-sm">${esc(e.documento || '')}</td><td class="num">${L.length}</td><td class="num">${D.produtos.filter(p => p.empresa_id === e.id).length}</td><td class="num">${brl(ab)}</td>
-          <td class="acts"><button class="ibtn" onclick="setEmpresa('${e.id}'); setTab('dashboard')">Abrir</button><button class="ibtn" onclick="formEmpresa('${e.id}')">Editar</button><button class="ibtn danger" onclick="excluir('empresas','${e.id}','${esc(e.nome).replace(/'/g, '')}')">Excluir</button></td></tr>`;
-      }).join('')}</tbody></table></div>` : '<p class="empty">Nenhuma empresa cadastrada ainda.</p>'}</div>
-    <div class="card"><h3 class="card-title">Backup</h3>
+          <td class="acts"><button class="ibtn" onclick="setEmpresa('${e.id}'); setTab('dashboard')">Abrir</button>${can('empresas', 'editar') ? `<button class="ibtn" onclick="formEmpresa('${e.id}')">Editar</button>` : ''}${can('empresas', 'excluir') ? `<button class="ibtn danger" onclick="excluir('empresas','${e.id}','${esc(e.nome).replace(/'/g, '')}')">Excluir</button>` : ''}</td></tr>`;
+      }).join('')}</tbody></table></div>` : '<p class="empty">Nenhuma empresa cadastrada ainda.</p>'}</div>` : ''}
+    ${can('backup', 'exportar') || can('backup', 'importar') ? `<div class="card"><h3 class="card-title">Backup</h3>
       <p class="card-sub">${mode === 'supabase' ? 'Os dados já ficam salvos na nuvem (Supabase). Mesmo assim, baixe uma cópia de segurança de vez em quando.' : 'No modo local os dados ficam apenas neste navegador — baixe cópias com frequência.'}</p>
       <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn ghost" onclick="exportBackup()">Baixar backup (JSON)</button>
-        <label class="btn ghost" style="cursor:pointer">Importar backup<input type="file" accept=".json,application/json" style="display:none" onchange="importBackup(this.files[0]); this.value=''"></label>
-      </div></div>`;
+        ${can('backup', 'exportar') ? `<button class="btn ghost" onclick="exportBackup()">Baixar backup (JSON)</button>` : ''}
+        ${can('backup', 'importar') ? `<label class="btn ghost" style="cursor:pointer">Importar backup<input type="file" accept=".json,application/json" style="display:none" onchange="importBackup(this.files[0]); this.value=''"></label>` : ''}
+      </div></div>` : ''}`;
 }
 function formEmpresa(id) {
   const e = id ? empresa(id) : null;
@@ -1088,7 +1204,7 @@ function salvarEmpresa(ev, id) {
 }
 function exportBackup() {
   const data = { app: 'gestao-a100', versao: 1, exportado_em: new Date().toISOString() };
-  TABLES.forEach(t => data[t] = D[t]);
+  DATA_TABLES.forEach(t => data[t] = D[t]);
   download(`backup-gestao-${today()}.json`, JSON.stringify(data, null, 2), 'application/json');
 }
 async function importBackup(file) {
@@ -1096,10 +1212,10 @@ async function importBackup(file) {
   let data;
   try { data = JSON.parse(await file.text()); } catch (e) { alert('Arquivo inválido.'); return; }
   if (data.app !== 'gestao-a100') { alert('Este arquivo não é um backup deste app.'); return; }
-  const counts = TABLES.map(t => `${t}: ${(data[t] || []).length}`).join('\n');
+  const counts = DATA_TABLES.map(t => `${t}: ${(data[t] || []).length}`).join('\n');
   if (!confirm(`Importar este backup?\n\n${counts}\n\nRegistros com o mesmo ID serão substituídos; os demais dados são mantidos.`)) return;
   run(async () => {
-    for (const t of TABLES) {
+    for (const t of DATA_TABLES) {
       const rows = data[t] || [];
       if (!rows.length) continue;
       if (mode === 'local') {
@@ -1113,6 +1229,619 @@ async function importBackup(file) {
       }
     }
   }, 'Backup importado');
+}
+
+// ---------------- CATEGORIAS ----------------
+const CF = { q: '', tipo: '', inativas: false };
+const TIPO_CAT = { receber: 'Receitas (a receber)', pagar: 'Despesas (a pagar)', ambos: 'Ambos' };
+function setCF(k, v) { CF[k] = v; renderCategoriasLista(); }
+function tabCategorias(body) {
+  body.innerHTML = `
+    <div class="toolbar"><h2 style="font-size:18px">Categorias</h2>
+      <div class="actions">${can('categorias', 'criar') ? `<button class="btn" onclick="formCategoria()">+ Nova categoria</button>` : ''}</div></div>
+    <p class="muted" style="margin:-4px 0 12px">As categorias aparecem na escolha ao lançar contas e agrupam as despesas e receitas nos relatórios. O grupo serve para organizar (ex.: "Despesas operacionais").</p>
+    <div class="filters">
+      <div class="f wide"><label>Buscar</label><input type="search" value="${esc(CF.q)}" placeholder="Nome ou grupo" oninput="setCF('q', this.value)"></div>
+      <div class="f"><label>Tipo</label><select onchange="setCF('tipo', this.value)">${opts(Object.entries(TIPO_CAT), CF.tipo, 'Todos')}</select></div>
+      <div class="f"><label class="check" style="margin-top:18px"><input type="checkbox" ${CF.inativas ? 'checked' : ''} onchange="setCF('inativas', this.checked)"> Mostrar inativas</label></div>
+    </div>
+    <div class="card"><div id="catLista"></div></div>`;
+  renderCategoriasLista();
+}
+function usoCategoria(nome) {
+  const L = escopo(D.lancamentos).filter(l => l.categoria === nome && l.status !== 'cancelado');
+  return { n: L.length, total: L.reduce((s, l) => s + valorReal(l), 0) };
+}
+function renderCategoriasLista() {
+  const el = document.getElementById('catLista'); if (!el) return;
+  const q = CF.q.trim().toLowerCase();
+  const rows = escopoCompart(D.categorias).filter(c => (CF.inativas || c.ativo !== false) && (!CF.tipo || c.tipo === CF.tipo) &&
+    (!q || [c.nome, c.grupo].join(' ').toLowerCase().includes(q)))
+    .sort((a, b) => (a.tipo === b.tipo ? 0 : a.tipo === 'receber' ? -1 : 1) || (a.grupo || '').localeCompare(b.grupo || '', 'pt-BR') || a.nome.localeCompare(b.nome, 'pt-BR'));
+  el.innerHTML = rows.length ? `<div class="tbl-wrap"><table>
+    <thead><tr><th>Categoria</th><th>Grupo</th><th>Tipo</th><th class="hide-sm">Empresa</th><th class="num">Lançamentos</th><th class="num">Total</th><th>Situação</th><th></th></tr></thead>
+    <tbody>${rows.map(c => {
+      const u = usoCategoria(c.nome);
+      return `<tr><td><b>${esc(c.nome)}</b></td><td>${esc(c.grupo || '—')}</td>
+        <td><span class="tag ${c.tipo === 'pagar' ? 'pagar' : c.tipo === 'receber' ? 'receber' : 'pendente'}">${c.tipo === 'pagar' ? 'Despesa' : c.tipo === 'receber' ? 'Receita' : 'Ambos'}</span></td>
+        <td class="hide-sm">${c.empresa_id ? esc(nomeEmpresa(c.empresa_id)) : '<span class="muted">Todas</span>'}</td>
+        <td class="num">${u.n}</td><td class="num">${u.n ? brl(u.total) : '—'}</td>
+        <td>${c.ativo === false ? '<span class="tag cancelado">Inativa</span>' : '<span class="tag ok">Ativa</span>'}</td>
+        <td class="acts">${can('categorias', 'editar') ? `<button class="ibtn" onclick="formCategoria('${c.id}')">Editar</button><button class="ibtn" onclick="toggleCategoria('${c.id}')">${c.ativo === false ? 'Ativar' : 'Desativar'}</button>` : ''}${can('categorias', 'excluir') ? `<button class="ibtn danger" onclick="excluirCategoria('${c.id}')">Excluir</button>` : ''}</td></tr>`;
+    }).join('')}</tbody></table></div>` : '<p class="empty">Nenhuma categoria encontrada.</p>';
+}
+function formCategoria(id) {
+  const c = id ? categoria(id) : null;
+  const grupos = [...new Set(D.categorias.map(x => x.grupo).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  openModal(c ? 'Editar categoria' : 'Nova categoria', `
+    <form id="mform" onsubmit="return salvarCategoria(event, ${c ? `'${c.id}'` : 'null'})">
+      <div class="form-grid">
+        <div class="fld full"><label>Nome</label><input name="nome" required maxlength="80" value="${esc(c?.nome)}" placeholder="Ex.: Energia"></div>
+        <div class="fld"><label>Tipo</label><select name="tipo">${opts(Object.entries(TIPO_CAT), c?.tipo || 'pagar')}</select></div>
+        <div class="fld"><label>Grupo</label><input name="grupo" list="grpList" maxlength="80" value="${esc(c?.grupo)}" placeholder="Ex.: Despesas operacionais"><datalist id="grpList">${grupos.map(g => `<option value="${esc(g)}">`).join('')}</datalist></div>
+        <div class="fld"><label>Empresa</label><select name="empresa_id">${empresaOpts(c ? c.empresa_id : '', 'Todas as empresas')}</select></div>
+        <div class="fld"><label class="check" style="margin-top:20px"><input type="checkbox" name="ativo" ${c?.ativo === false ? '' : 'checked'}> Ativa</label></div>
+        ${c ? `<p class="hint">Ao renomear, todas as contas que usam "${esc(c.nome)}" passam a usar o novo nome.</p>` : ''}
+      </div>
+      <div class="modal-foot"><button type="button" class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn">Salvar</button></div>
+    </form>`);
+}
+function salvarCategoria(ev, id) {
+  ev.preventDefault();
+  const v = Object.fromEntries(new FormData(ev.target));
+  const row = { nome: v.nome.trim(), tipo: v.tipo, grupo: v.grupo.trim() || null, empresa_id: v.empresa_id || null, ativo: !!v.ativo };
+  const dup = D.categorias.find(c => c.id !== id && norm(c.nome) === norm(row.nome) && (c.empresa_id || '') === (row.empresa_id || ''));
+  if (dup) { alert(`Já existe a categoria "${dup.nome}".`); return false; }
+  const antigo = id ? categoria(id)?.nome : null;
+  run(async () => {
+    if (id && antigo && antigo !== row.nome) await renomearCategoriaNasContas(antigo, row.nome);
+    if (id) await DB().update('categorias', id, row); else await DB().insert('categorias', [row]);
+  }, 'Categoria salva');
+  return false;
+}
+async function renomearCategoriaNasContas(antigo, novo) {
+  if (mode === 'local') {
+    const db = LocalDB.read();
+    db.lancamentos = (db.lancamentos || []).map(l => l.categoria === antigo ? { ...l, categoria: novo } : l);
+    LocalDB.write(db);
+  } else await RemoteDB.rpc('renomear_categoria', { antigo, novo });
+}
+function toggleCategoria(id) { const c = categoria(id); if (c) run(() => DB().update('categorias', id, { ativo: c.ativo === false }), c.ativo === false ? 'Categoria ativada' : 'Categoria desativada'); }
+function excluirCategoria(id) {
+  const c = categoria(id); if (!c) return;
+  const u = usoCategoria(c.nome);
+  if (!confirm(u.n ? `"${c.nome}" está em ${u.n} lançamento(s). Eles continuam com esse nome, mas a categoria some da lista.\n\nDica: use "Desativar" para só escondê-la.\n\nExcluir mesmo assim?` : `Excluir a categoria "${c.nome}"?`)) return;
+  run(() => DB().remove('categorias', id), 'Categoria excluída');
+}
+
+// ---------------- IMPORTAÇÃO ----------------
+function norm(s) { return String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+// datas: dd/mm/aaaa, dd/mm/aa, aaaa-mm-dd, dd-mm-aaaa ou número de série do Excel
+function parseData(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number' && v > 20000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 86400000)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`; }
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return valida(+m[1], +m[2], +m[3]);
+  m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+  if (m) return valida(m[3].length === 2 ? 2000 + +m[3] : +m[3], +m[2], +m[1]);
+  return null;
+  function valida(y, mo, d) { const dt = new Date(y, mo - 1, d); return dt.getMonth() === mo - 1 && dt.getDate() === d ? isoLocal(dt) : null; }
+}
+// valores: 1.234,56 · 1234,56 · 1234.56 · R$ 1.234,56 · número do Excel
+function parseValor(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return v;
+  let s = String(v).replace(/R\$|\s/g, '');
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  const n = Number(s);
+  return isFinite(n) ? n : NaN;
+}
+const LAYOUTS = {
+  contas: { nome: 'Contas a pagar / receber', cols: [
+    ['tipo', 'Tipo', 1, 'Pagar ou Receber', ['Receber', 'Pagar'], ['natureza', 'pagarreceber']],
+    ['descricao', 'Descrição', 1, 'Texto', ['Lavagem enxoval - outubro', 'Conta de energia'], ['historico', 'descr']],
+    ['valor', 'Valor', 1, 'Número (ex.: 1.250,00)', ['1.250,00', '389,90'], ['valortotal', 'vlr']],
+    ['vencimento', 'Vencimento', 1, 'Data dd/mm/aaaa', ['10/11/2026', '15/11/2026'], ['datavencimento', 'venc', 'data']],
+    ['empresa', 'Empresa', 0, 'Nome da empresa. Vazio = empresa escolhida na tela', ['', ''], []],
+    ['parceiro', 'Cliente/Fornecedor', 0, 'Nome (criado se não existir)', ['Hotel Sol', 'Enel'], ['cliente', 'fornecedor', 'nome', 'clientefornecedor']],
+    ['servico', 'Serviço', 0, 'Nome do serviço (criado se não existir)', ['Lavagem enxoval', ''], []],
+    ['categoria', 'Categoria', 0, 'Nome da categoria (criada se não existir)', ['Lavagem', 'Energia'], []],
+    ['situacao', 'Situação', 0, 'Pendente, Pago ou Cancelado (vazio = Pendente)', ['Pendente', 'Pago'], ['status']],
+    ['pagamento', 'Data pagamento', 0, 'Data dd/mm/aaaa (se pago)', ['', '15/11/2026'], ['datapagamento', 'pagoem', 'datarecebimento']],
+    ['valor_pago', 'Valor pago', 0, 'Se vazio, usa o Valor', ['', '389,90'], ['valorrecebido']],
+    ['forma', 'Forma pagamento', 0, 'Pix, Dinheiro, Boleto…', ['', 'Boleto'], ['formadepagamento', 'forma']],
+    ['observacao', 'Observação', 0, 'Texto livre', ['', 'NF 1234'], ['obs']]
+  ] },
+  parceiros: { nome: 'Clientes e fornecedores', cols: [
+    ['nome', 'Nome', 1, 'Nome ou razão social', ['Hotel Sol', 'Química Brasil Ltda'], ['razaosocial', 'cliente', 'fornecedor']],
+    ['tipo', 'Tipo', 0, 'Cliente, Fornecedor ou Ambos (vazio = Cliente)', ['Cliente', 'Fornecedor'], []],
+    ['documento', 'CPF/CNPJ', 0, 'Texto', ['12.345.678/0001-90', ''], ['cpf', 'cnpj', 'documento']],
+    ['telefone', 'Telefone', 0, 'Texto', ['(11) 99999-0000', ''], ['celular', 'fone']],
+    ['email', 'E-mail', 0, 'Texto', ['contato@hotelsol.com', ''], ['email']],
+    ['empresa', 'Empresa', 0, 'Vazio = todas as empresas', ['', ''], []],
+    ['observacao', 'Observação', 0, 'Texto livre', ['', ''], ['obs']]
+  ] },
+  servicos: { nome: 'Serviços', cols: [
+    ['nome', 'Nome', 1, 'Nome do serviço', ['Lavagem enxoval', 'Passadoria'], ['servico']],
+    ['preco', 'Preço', 0, 'Número (ex.: 350,00)', ['350,00', '80,00'], ['valor', 'precopadrao']],
+    ['descricao', 'Descrição', 0, 'Texto livre', ['Até 50 kg', ''], []],
+    ['empresa', 'Empresa', 0, 'Vazio = todas as empresas', ['', ''], []]
+  ] },
+  produtos: { nome: 'Produtos (estoque)', cols: [
+    ['nome', 'Nome', 1, 'Nome do produto', ['Sabão líquido 5L', 'Amaciante 5L'], ['produto', 'descricao']],
+    ['sku', 'Código', 0, 'Código interno / SKU', ['SAB5', 'AMA5'], ['codigo', 'sku', 'cod']],
+    ['unidade', 'Unidade', 0, 'un, kg, L, cx… (vazio = un)', ['un', 'un'], ['un', 'unid']],
+    ['estoque_minimo', 'Estoque mínimo', 0, 'Número', ['10', '5'], ['minimo', 'estoqueminimo']],
+    ['custo', 'Custo', 0, 'Custo unitário', ['45,90', '32,00'], ['custounitario', 'precocusto']],
+    ['preco_venda', 'Preço venda', 0, 'Preço de venda', ['0', '0'], ['precovenda', 'venda']],
+    ['inicial', 'Estoque inicial', 0, 'Quantidade em estoque hoje', ['20', '12'], ['estoque', 'saldo', 'quantidade', 'estoqueatual']],
+    ['empresa', 'Empresa', 0, 'Vazio = empresa escolhida na tela', ['', ''], []]
+  ] },
+  movimentos: { nome: 'Movimentações de estoque', cols: [
+    ['produto', 'Produto', 1, 'Nome ou código do produto já cadastrado', ['Sabão líquido 5L', 'AMA5'], ['codigo', 'sku']],
+    ['tipo', 'Tipo', 1, 'Entrada, Saída ou Ajuste', ['Entrada', 'Saída'], ['movimento']],
+    ['quantidade', 'Quantidade', 1, 'Número (ajuste aceita negativo)', ['10', '2'], ['qtd', 'qtde', 'quant']],
+    ['valor_unitario', 'Valor unitário', 0, 'Vazio = custo/preço do produto', ['45,90', ''], ['valor', 'custo', 'preco']],
+    ['data', 'Data', 1, 'Data dd/mm/aaaa', ['05/10/2026', '06/10/2026'], ['datamovimento']],
+    ['observacao', 'Observação', 0, 'Texto livre', ['NF 778', 'Consumo semanal'], ['obs']],
+    ['empresa', 'Empresa', 0, 'Vazio = empresa escolhida na tela', ['', ''], []]
+  ] },
+  categorias: { nome: 'Categorias', cols: [
+    ['nome', 'Nome', 1, 'Nome da categoria', ['Energia', 'Lavagem'], ['categoria']],
+    ['tipo', 'Tipo', 0, 'Pagar, Receber ou Ambos (vazio = Ambos)', ['Pagar', 'Receber'], []],
+    ['grupo', 'Grupo', 0, 'Para organizar', ['Despesas operacionais', 'Receitas'], []],
+    ['empresa', 'Empresa', 0, 'Vazio = todas as empresas', ['', ''], []]
+  ] }
+};
+const IMP = { layout: 'contas', empresa: '', criar: true, linhas: null, arquivo: '' };
+function layoutsPermitidos() {
+  const ok = {
+    contas: tiposContaPermitidos('criar').length > 0, parceiros: can('parceiros', 'criar'), servicos: can('servicos', 'criar'),
+    produtos: can('estoque', 'criar'), movimentos: can('estoque', 'movimentar') || can('estoque', 'criar'), categorias: can('categorias', 'criar')
+  };
+  return Object.keys(LAYOUTS).filter(k => ok[k]);
+}
+function tabImportar(body) {
+  const lays = layoutsPermitidos();
+  if (!lays.length) { body.innerHTML = `<div class="card"><p class="empty">Seu nível de acesso não permite criar nenhum tipo de registro.</p></div>`; return; }
+  if (!lays.includes(IMP.layout)) IMP.layout = lays[0];
+  if (!IMP.empresa || !empresa(IMP.empresa)) IMP.empresa = empresaAtual || D.empresas[0]?.id || '';
+  const L = LAYOUTS[IMP.layout];
+  body.innerHTML = `
+    <div class="toolbar"><h2 style="font-size:18px">Importar dados de planilha</h2></div>
+    <div class="card">
+      <h3 class="card-title">1. Escolha o que vai importar e baixe o modelo</h3>
+      <p class="card-sub">Preencha o modelo no Excel (ou Google Planilhas) mantendo os nomes das colunas na primeira linha. Também dá para usar uma planilha sua: o app reconhece as colunas pelo nome.</p>
+      <div class="filters" style="border:none;padding:0;margin:0 0 12px">
+        <div class="f"><label>Tipo de dado</label><select onchange="IMP.layout=this.value; IMP.linhas=null; renderTab()">${opts(lays.map(k => [k, LAYOUTS[k].nome]), IMP.layout)}</select></div>
+        <div class="f"><label>Empresa padrão</label><select onchange="IMP.empresa=this.value; revalidarImport()">${empresaOpts(IMP.empresa)}</select></div>
+        <div class="f" style="justify-content:flex-end;flex-direction:row;gap:8px;align-items:flex-end">
+          <button class="btn ghost" onclick="baixarModelo('xlsx')">Baixar modelo Excel</button><button class="btn ghost" onclick="baixarModelo('csv')">Modelo CSV</button></div>
+      </div>
+      <div class="tbl-wrap"><table><thead><tr><th>Coluna</th><th>Obrigatória</th><th>Formato</th><th class="hide-sm">Exemplo</th></tr></thead>
+        <tbody>${L.cols.map(c => `<tr><td><b>${esc(c[1])}</b></td><td>${c[2] ? '<span class="tag pagar">Sim</span>' : '<span class="muted">Não</span>'}</td><td>${esc(c[3])}</td><td class="hide-sm muted">${esc(c[4].filter(Boolean).join(' · '))}</td></tr>`).join('')}</tbody></table></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">2. Envie o arquivo preenchido</h3>
+      <p class="card-sub">Aceita Excel (.xlsx, .xls) e CSV. Nada é gravado antes de você conferir e confirmar.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <label class="btn" style="cursor:pointer">Escolher arquivo<input type="file" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="lerArquivoImport(this.files[0]); this.value=''"></label>
+        ${['contas', 'movimentos'].includes(IMP.layout) ? `<label class="check"><input type="checkbox" ${IMP.criar ? 'checked' : ''} onchange="IMP.criar=this.checked; revalidarImport()"> Criar automaticamente clientes, serviços e categorias que não existirem</label>` : ''}
+        ${IMP.arquivo ? `<span class="muted">Arquivo: <b>${esc(IMP.arquivo)}</b></span>` : ''}
+      </div>
+      <div id="impPreview"></div>
+    </div>`;
+  renderImportPreview();
+}
+function baixarModelo(fmt) {
+  const L = LAYOUTS[IMP.layout];
+  const head = L.cols.map(c => c[1]);
+  const ex = [0, 1].map(i => L.cols.map(c => c[4][i] ?? ''));
+  const nome = `modelo-${IMP.layout}`;
+  if (fmt === 'xlsx' && window.XLSX) {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([head, ...ex]);
+    ws['!cols'] = head.map(h => ({ wch: Math.max(14, h.length + 4) }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Dados');
+    const inst = XLSX.utils.aoa_to_sheet([['Coluna', 'Obrigatória', 'Formato'], ...L.cols.map(c => [c[1], c[2] ? 'Sim' : 'Não', c[3]]),
+      [], ['Apague as linhas de exemplo antes de importar. Não mude os nomes das colunas.']]);
+    inst['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, inst, 'Instruções');
+    XLSX.writeFile(wb, nome + '.xlsx');
+    return;
+  }
+  const cell = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  download(nome + '.csv', '﻿' + [head, ...ex].map(r => r.map(cell).join(';')).join('\r\n'), 'text/csv;charset=utf-8');
+}
+function parseCSV(text) {
+  text = text.replace(/^﻿/, '');
+  const first = text.split(/\r?\n/)[0] || '';
+  const delim = [';', ',', '\t'].sort((a, b) => first.split(b).length - first.split(a).length)[0];
+  const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === delim) { row.push(cur); cur = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cur); rows.push(row); row = []; cur = ''; }
+    else cur += c;
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+async function lerArquivoImport(file) {
+  if (!file) return;
+  let matriz;
+  try {
+    const buf = await file.arrayBuffer();
+    if (/\.(xlsx|xls)$/i.test(file.name)) {
+      if (!window.XLSX) { alert('Leitor de Excel não carregou. Salve a planilha como CSV e tente de novo.'); return; }
+      const wb = XLSX.read(buf, { type: 'array' });
+      matriz = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+    } else {
+      let text;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (e) { text = new TextDecoder('windows-1252').decode(buf); }
+      matriz = parseCSV(text);
+    }
+  } catch (e) { alert('Não foi possível ler o arquivo: ' + e.message); return; }
+  matriz = matriz.filter(r => r.some(x => String(x ?? '').trim() !== ''));
+  if (matriz.length < 2) { alert('O arquivo não tem linhas de dados (a primeira linha deve ser o cabeçalho).'); return; }
+  // liga cada coluna do arquivo a uma coluna do modelo pelo nome
+  const L = LAYOUTS[IMP.layout];
+  const header = matriz[0].map(norm);
+  const idx = {};
+  L.cols.forEach(([k, h, , , , alias]) => {
+    const nomes = [norm(h), norm(k), ...alias.map(norm)];
+    const i = header.findIndex(x => nomes.includes(x));
+    if (i >= 0) idx[k] = i;
+  });
+  const faltando = L.cols.filter(c => c[2] && idx[c[0]] == null).map(c => c[1]);
+  if (faltando.length) { alert(`Coluna(s) obrigatória(s) não encontrada(s) no arquivo: ${faltando.join(', ')}.\n\nUse o modelo ou renomeie as colunas da primeira linha.`); return; }
+  IMP.arquivo = file.name;
+  IMP.brutas = matriz.slice(1).map((r, i) => {
+    const o = { _linha: i + 2 };
+    for (const k in idx) o[k] = typeof r[idx[k]] === 'string' ? r[idx[k]].trim() : r[idx[k]];
+    return o;
+  });
+  revalidarImport();
+  renderTab();
+}
+function revalidarImport() { if (IMP.brutas) IMP.linhas = validarImport(IMP.layout, IMP.brutas); renderImportPreview(); }
+
+function acharEmpresa(nome) { const n = norm(nome); return D.empresas.find(e => norm(e.nome) === n); }
+function acharPorNome(list, nome, emp) { const n = norm(nome); return list.find(x => norm(x.nome) === n && (!emp || !x.empresa_id || x.empresa_id === emp)); }
+function mapTipoConta(v) { const n = norm(v); if (/^(p|desp|saida|debito)/.test(n)) return 'pagar'; if (/^(r|rec|entrada|credito)/.test(n)) return 'receber'; return null; }
+
+function validarImport(lay, brutas) {
+  const vistos = new Set();
+  return brutas.map(b => {
+    const r = { linha: b._linha, dados: b, erros: [], avisos: [], cria: [] };
+    const exigeEmpresa = ['contas', 'produtos', 'movimentos'].includes(lay);
+    let emp = null;
+    if (b.empresa) { const e = acharEmpresa(b.empresa); if (e) emp = e.id; else r.erros.push(`Empresa "${b.empresa}" não encontrada`); }
+    else if (exigeEmpresa) { emp = IMP.empresa || null; if (!emp) r.erros.push('Escolha a empresa padrão'); }
+    r.emp = emp;
+    const obrig = (k, nome) => { if (b[k] == null || String(b[k]).trim() === '') { r.erros.push(`${nome} vazio`); return false; } return true; };
+
+    if (lay === 'contas') {
+      const tipo = mapTipoConta(b.tipo);
+      if (!tipo) r.erros.push('Tipo deve ser Pagar ou Receber'); else if (!canConta(tipo, 'criar')) r.erros.push(`Sem permissão para criar contas a ${tipo}`);
+      obrig('descricao', 'Descrição');
+      const valor = parseValor(b.valor); if (valor == null || isNaN(valor)) r.erros.push('Valor inválido');
+      const venc = parseData(b.vencimento); if (!venc) r.erros.push('Vencimento inválido');
+      const sn = norm(b.situacao);
+      const status = !sn || sn.startsWith('pend') || sn.startsWith('aberto') ? 'pendente' : /^(pag|pg|quit|receb|liquid|baix)/.test(sn) ? 'pago' : sn.startsWith('canc') ? 'cancelado' : null;
+      if (!status) r.erros.push('Situação deve ser Pendente, Pago ou Cancelado');
+      let pagamento = null, valorPago = null;
+      if (status === 'pago') {
+        pagamento = b.pagamento ? parseData(b.pagamento) : venc;
+        if (b.pagamento && !pagamento) r.erros.push('Data de pagamento inválida');
+        valorPago = b.valor_pago === '' || b.valor_pago == null ? valor : parseValor(b.valor_pago);
+        if (isNaN(valorPago)) r.erros.push('Valor pago inválido');
+      }
+      let parceiro_id = null, servico_id = null;
+      if (b.parceiro) {
+        const p = acharPorNome(D.parceiros, b.parceiro, emp);
+        if (p) parceiro_id = p.id;
+        else if (IMP.criar && can('parceiros', 'criar')) r.cria.push(['parceiros', b.parceiro, tipo === 'pagar' ? 'fornecedor' : 'cliente']);
+        else r.erros.push(`Cliente/fornecedor "${b.parceiro}" não cadastrado`);
+      }
+      if (b.servico) {
+        const s = acharPorNome(D.servicos, b.servico, emp);
+        if (s) servico_id = s.id;
+        else if (IMP.criar && can('servicos', 'criar')) r.cria.push(['servicos', b.servico]);
+        else r.erros.push(`Serviço "${b.servico}" não cadastrado`);
+      }
+      let cat = b.categoria ? String(b.categoria).trim() : null;
+      if (cat) {
+        const c = acharPorNome(D.categorias, cat, emp);
+        if (c) cat = c.nome;
+        else if (IMP.criar && can('categorias', 'criar')) r.cria.push(['categorias', cat, tipo || 'ambos']);
+        else r.avisos.push(`Categoria "${cat}" não cadastrada (será gravada só como texto)`);
+      }
+      r.row = { empresa_id: emp, tipo, descricao: String(b.descricao ?? '').slice(0, 200), valor, vencimento: venc, status, pagamento, valor_pago: valorPago,
+        forma_pagamento: b.forma || null, parceiro_id, servico_id, categoria: cat, observacao: b.observacao || null };
+      r.resumo = `${tipo === 'pagar' ? 'Pagar' : tipo === 'receber' ? 'Receber' : '?'} · ${b.descricao || ''} · ${valor != null && !isNaN(valor) ? brl(valor) : '?'} · ${venc ? fmtDate(venc) : '?'}`;
+    }
+    if (lay === 'parceiros') {
+      obrig('nome', 'Nome');
+      const tn = norm(b.tipo);
+      const tipo = !tn || tn.startsWith('cli') ? 'cliente' : tn.startsWith('forn') ? 'fornecedor' : tn.startsWith('amb') ? 'ambos' : null;
+      if (!tipo) r.erros.push('Tipo deve ser Cliente, Fornecedor ou Ambos');
+      if (b.nome && (acharPorNome(D.parceiros, b.nome, emp) || vistos.has(norm(b.nome)))) r.pular = 'Já cadastrado';
+      vistos.add(norm(b.nome));
+      r.row = { empresa_id: emp, nome: String(b.nome ?? ''), tipo, documento: b.documento || null, telefone: b.telefone ? String(b.telefone) : null, email: b.email || null, observacao: b.observacao || null };
+      r.resumo = `${b.nome || ''} · ${TIPO_PARC[tipo] || '?'}`;
+    }
+    if (lay === 'servicos') {
+      obrig('nome', 'Nome');
+      const preco = parseValor(b.preco); if (isNaN(preco)) r.erros.push('Preço inválido');
+      if (b.nome && (acharPorNome(D.servicos, b.nome, emp) || vistos.has(norm(b.nome)))) r.pular = 'Já cadastrado';
+      vistos.add(norm(b.nome));
+      r.row = { empresa_id: emp, nome: String(b.nome ?? ''), preco: preco || 0, descricao: b.descricao || null };
+      r.resumo = `${b.nome || ''} · ${brl(preco || 0)}`;
+    }
+    if (lay === 'categorias') {
+      obrig('nome', 'Nome');
+      const tn = norm(b.tipo);
+      const tipo = !tn || tn.startsWith('amb') ? 'ambos' : mapTipoConta(b.tipo);
+      if (!tipo) r.erros.push('Tipo deve ser Pagar, Receber ou Ambos');
+      if (b.nome && (acharPorNome(D.categorias, b.nome, emp) || vistos.has(norm(b.nome)))) r.pular = 'Já cadastrada';
+      vistos.add(norm(b.nome));
+      r.row = { empresa_id: emp, nome: String(b.nome ?? ''), tipo, grupo: b.grupo || null, ativo: true };
+      r.resumo = `${b.nome || ''} · ${TIPO_CAT[tipo] || '?'}${b.grupo ? ' · ' + b.grupo : ''}`;
+    }
+    if (lay === 'produtos') {
+      obrig('nome', 'Nome');
+      const nums = {};
+      for (const k of ['estoque_minimo', 'custo', 'preco_venda', 'inicial']) { const x = parseValor(b[k]); if (isNaN(x)) r.erros.push(`${k.replace('_', ' ')} inválido`); nums[k] = x || 0; }
+      const ja = D.produtos.find(p => p.empresa_id === emp && (norm(p.nome) === norm(b.nome) || (b.sku && p.sku && norm(p.sku) === norm(b.sku))));
+      if (ja || vistos.has(emp + norm(b.nome))) r.pular = 'Já cadastrado';
+      vistos.add(emp + norm(b.nome));
+      r.row = { empresa_id: emp, nome: String(b.nome ?? ''), sku: b.sku ? String(b.sku) : null, unidade: b.unidade || 'un', estoque_minimo: nums.estoque_minimo, custo: nums.custo, preco_venda: nums.preco_venda };
+      r.inicial = nums.inicial;
+      r.resumo = `${b.nome || ''}${b.sku ? ' (' + b.sku + ')' : ''} · estoque ${qty(nums.inicial)}`;
+    }
+    if (lay === 'movimentos') {
+      obrig('produto', 'Produto');
+      const n = norm(b.produto);
+      const p = D.produtos.find(x => x.empresa_id === emp && (norm(x.nome) === n || (x.sku && norm(x.sku) === n)));
+      if (b.produto && !p) r.erros.push(`Produto "${b.produto}" não encontrado nesta empresa`);
+      const tn = norm(b.tipo);
+      const tipo = tn.startsWith('ent') ? 'entrada' : (tn.startsWith('sai') || tn.startsWith('baix') || tn.startsWith('cons')) ? 'saida' : tn.startsWith('aj') ? 'ajuste' : null;
+      if (!tipo) r.erros.push('Tipo deve ser Entrada, Saída ou Ajuste');
+      let q = parseValor(b.quantidade); if (q == null || isNaN(q) || q === 0) r.erros.push('Quantidade inválida'); else if (tipo !== 'ajuste') q = Math.abs(q);
+      const data = parseData(b.data); if (!data) r.erros.push('Data inválida');
+      let vu = parseValor(b.valor_unitario); if (isNaN(vu)) r.erros.push('Valor unitário inválido');
+      if (vu == null && p) vu = num(tipo === 'saida' ? p.preco_venda : p.custo);
+      r.row = { empresa_id: emp, produto_id: p?.id, tipo, quantidade: q, valor_unitario: vu || 0, data, observacao: b.observacao || null };
+      r.resumo = `${p?.nome || b.produto || ''} · ${tipo || '?'} · ${q != null && !isNaN(q) ? qty(q) : '?'}`;
+    }
+    r.status = r.erros.length ? 'erro' : r.pular ? 'pular' : 'ok';
+    return r;
+  });
+}
+function renderImportPreview() {
+  const el = document.getElementById('impPreview'); if (!el) return;
+  const L = IMP.linhas;
+  if (!L) { el.innerHTML = ''; return; }
+  const ok = L.filter(r => r.status === 'ok'), err = L.filter(r => r.status === 'erro'), pul = L.filter(r => r.status === 'pular');
+  const criar = new Map();
+  ok.forEach(r => r.cria.forEach(([t, nome]) => criar.set(t + '|' + norm(nome), [t, nome])));
+  const nomesT = { parceiros: 'cliente(s)/fornecedor(es)', servicos: 'serviço(s)', categorias: 'categoria(s)' };
+  const contagem = {}; [...criar.values()].forEach(([t]) => contagem[t] = (contagem[t] || 0) + 1);
+  el.innerHTML = `
+    <div class="kpis" style="margin-top:14px">
+      <div class="kpi"><p class="kpi-label">Prontas para importar</p><p class="kpi-value val-in">${ok.length}</p></div>
+      <div class="kpi"><p class="kpi-label">Com erro (serão ignoradas)</p><p class="kpi-value ${err.length ? 'val-out' : ''}">${err.length}</p></div>
+      <div class="kpi"><p class="kpi-label">Já existem (ignoradas)</p><p class="kpi-value">${pul.length}</p></div>
+    </div>
+    ${Object.keys(contagem).length ? `<p class="muted">Também serão criados: ${Object.entries(contagem).map(([t, n]) => `${n} ${nomesT[t]}`).join(', ')}.</p>` : ''}
+    <div class="tbl-wrap"><table><thead><tr><th>Linha</th><th>Situação</th><th>Dados</th><th>Mensagem</th></tr></thead>
+      <tbody>${[...err, ...ok, ...pul].slice(0, 200).map(r => `<tr><td>${r.linha}</td>
+        <td>${r.status === 'ok' ? '<span class="tag ok">OK</span>' : r.status === 'erro' ? '<span class="tag vencido">Erro</span>' : '<span class="tag cancelado">Ignorada</span>'}</td>
+        <td>${esc(r.resumo || '')}</td><td class="${r.status === 'erro' ? 'val-out' : 'muted'}">${esc([...r.erros, ...(r.pular ? [r.pular] : []), ...r.avisos, ...r.cria.map(c => `cria "${c[1]}"`)].join(' · '))}</td></tr>`).join('')}</tbody></table></div>
+    ${L.length > 200 ? `<p class="muted">Mostrando 200 de ${L.length} linhas (os erros aparecem primeiro).</p>` : ''}
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="IMP.linhas=null; IMP.brutas=null; IMP.arquivo=''; renderTab()">Cancelar</button>
+      <button class="btn" ${ok.length ? '' : 'disabled'} onclick="executarImport()">Importar ${ok.length} linha(s)</button>
+    </div>`;
+}
+async function executarImport() {
+  const linhas = IMP.linhas.filter(r => r.status === 'ok');
+  if (!linhas.length) return;
+  if (!confirm(`Importar ${linhas.length} linha(s) de "${LAYOUTS[IMP.layout].nome}"?`)) return;
+  const lay = IMP.layout;
+  const emLotes = async (t, rows) => { const out = []; for (let i = 0; i < rows.length; i += 500) out.push(...await DB().insert(t, rows.slice(i, i + 500))); return out; };
+  const ok = await run(async () => {
+    // 1) cadastros que faltam (uma vez por nome)
+    const novos = { parceiros: new Map(), servicos: new Map(), categorias: new Map() };
+    linhas.forEach(r => r.cria.forEach(([t, nome, extra]) => {
+      const k = norm(nome);
+      if (!novos[t].has(k)) novos[t].set(k, t === 'parceiros' ? { nome, tipo: extra, empresa_id: null } : t === 'servicos' ? { nome, preco: 0, empresa_id: null } : { nome, tipo: extra, ativo: true, empresa_id: null });
+      else if (t !== 'servicos' && novos[t].get(k).tipo !== extra) novos[t].get(k).tipo = 'ambos';
+    }));
+    const ids = { parceiros: {}, servicos: {}, categorias: {} };
+    for (const t of Object.keys(novos)) {
+      if (!novos[t].size) continue;
+      const criados = await emLotes(t, [...novos[t].values()]);
+      criados.forEach(c => ids[t][norm(c.nome)] = c);
+    }
+    // 2) os registros
+    if (lay === 'contas') {
+      await emLotes('lancamentos', linhas.map(r => ({
+        ...r.row,
+        parceiro_id: r.row.parceiro_id || (r.dados.parceiro ? ids.parceiros[norm(r.dados.parceiro)]?.id : null) || null,
+        servico_id: r.row.servico_id || (r.dados.servico ? ids.servicos[norm(r.dados.servico)]?.id : null) || null,
+        categoria: r.row.categoria ? (ids.categorias[norm(r.row.categoria)]?.nome || r.row.categoria) : null
+      })));
+    } else if (lay === 'produtos') {
+      const criados = await emLotes('produtos', linhas.map(r => r.row));
+      const movs = criados.map((p, i) => linhas[i].inicial > 0 ? { empresa_id: p.empresa_id, produto_id: p.id, tipo: 'entrada', quantidade: linhas[i].inicial, valor_unitario: p.custo, data: today(), observacao: 'Estoque inicial (importação)' } : null).filter(Boolean);
+      if (movs.length) await emLotes('movimentos_estoque', movs);
+    } else {
+      await emLotes({ parceiros: 'parceiros', servicos: 'servicos', categorias: 'categorias', movimentos: 'movimentos_estoque' }[lay], linhas.map(r => r.row));
+    }
+  }, `${linhas.length} registro(s) importado(s)`);
+  if (ok) { IMP.linhas = null; IMP.brutas = null; IMP.arquivo = ''; renderTab(); }
+}
+
+// ---------------- USUÁRIOS E NÍVEIS DE ACESSO ----------------
+function tabUsuarios(body) {
+  if (mode === 'local') {
+    body.innerHTML = `<div class="card"><h3 class="card-title">Usuários e níveis de acesso</h3><p class="card-sub">Disponível apenas no modo online (Supabase), onde cada pessoa entra com seu próprio e-mail e senha.</p></div>`;
+    return;
+  }
+  const perfis = [...D.perfis].sort((a, b) => (a.ativo === b.ativo ? 0 : a.ativo ? 1 : -1) || (a.nome || a.email || '').localeCompare(b.nome || b.email || '', 'pt-BR'));
+  const pend = perfis.filter(p => !p.ativo && !p.nivel_id && !p.admin);
+  const niveis = [...D.niveis_acesso].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  body.innerHTML = `
+    <div class="toolbar"><h2 style="font-size:18px">Usuários</h2><div class="actions"><button class="btn" onclick="formUsuario()">+ Novo usuário</button></div></div>
+    ${pend.length ? `<div class="banner amber"><b>${pend.length} pessoa(s) aguardando liberação.</b> Clique em "Liberar" para definir o nível de acesso.</div>` : ''}
+    <div class="card"><div class="tbl-wrap"><table>
+      <thead><tr><th>Nome</th><th class="hide-sm">E-mail</th><th>Nível de acesso</th><th class="hide-sm">Empresas</th><th>Situação</th><th></th></tr></thead>
+      <tbody>${perfis.map(p => {
+        const sit = p.ativo ? '<span class="tag ok">Ativo</span>' : (!p.nivel_id && !p.admin ? '<span class="tag pendente">Aguardando liberação</span>' : '<span class="tag cancelado">Inativo</span>');
+        const emps = p.admin || !p.empresas?.length ? 'Todas' : p.empresas.map(id => empresa(id)?.nome || '?').join(', ');
+        const eu = p.user_id === user?.id;
+        return `<tr><td><b>${esc(p.nome || '—')}</b>${eu ? ' <span class="muted">(você)</span>' : ''}</td>
+          <td class="hide-sm">${esc(p.email || '')}</td>
+          <td>${p.admin ? '<b>Administrador</b>' : esc(nivel(p.nivel_id)?.nome || '— sem nível —')}</td>
+          <td class="hide-sm">${esc(emps)}</td><td>${sit}</td>
+          <td class="acts"><button class="ibtn" onclick="formUsuario('${p.user_id}')">${!p.ativo && !p.nivel_id && !p.admin ? 'Liberar' : 'Editar'}</button>
+            ${eu ? '' : `<button class="ibtn ${p.ativo ? 'danger' : ''}" onclick="toggleUsuario('${p.user_id}')">${p.ativo ? 'Desativar' : 'Ativar'}</button>`}</td></tr>`;
+      }).join('')}</tbody></table></div>
+      <p class="muted">Usuário desativado não consegue ver nem alterar nada. Para apagar a conta de vez, use o painel do Supabase (Authentication → Users).</p></div>
+
+    <div class="toolbar" style="margin-top:22px"><h2 style="font-size:18px">Níveis de acesso</h2><div class="actions"><button class="btn" onclick="formNivel()">+ Novo nível</button></div></div>
+    <p class="muted" style="margin:-4px 0 12px">Cada nível define, para cada área do app, o que a pessoa pode fazer: ver, criar, editar, dar baixa, excluir, exportar… Administradores podem tudo.</p>
+    <div class="grid2">${niveis.map(n => {
+      const qtd = D.perfis.filter(p => p.nivel_id === n.id).length;
+      return `<div class="card"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+        <div><h3 class="card-title">${esc(n.nome)}</h3><p class="card-sub">${esc(n.descricao || '')} · ${qtd} usuário(s)</p></div>
+        <div style="white-space:nowrap"><button class="ibtn" onclick="formNivel('${n.id}')">Editar</button><button class="ibtn danger" onclick="excluirNivel('${n.id}')">Excluir</button></div></div>
+        ${resumoPerms(n.permissoes)}</div>`;
+    }).join('') || '<div class="card"><p class="empty">Nenhum nível criado.</p></div>'}</div>`;
+}
+function resumoPerms(p) {
+  const linhas = MODULOS.filter(([k]) => p?.[k]?.length).map(([k, nome]) => `<div class="list-row"><span>${nome}</span><span class="muted">${p[k].map(a => ACOES[a]).join(', ')}</span></div>`);
+  return linhas.length ? linhas.join('') : '<p class="empty">Sem permissões.</p>';
+}
+function formNivel(id) {
+  const n = id ? nivel(id) : null;
+  const p = n?.permissoes || {};
+  openModal(n ? 'Editar nível de acesso' : 'Novo nível de acesso', `
+    <form id="mform" onsubmit="return salvarNivel(event, ${n ? `'${n.id}'` : 'null'})">
+      <div class="form-grid">
+        <div class="fld"><label>Nome do nível</label><input name="nome" required maxlength="60" value="${esc(n?.nome)}" placeholder="Ex.: Caixa, Gerente"></div>
+        <div class="fld"><label>Descrição</label><input name="descricao" maxlength="160" value="${esc(n?.descricao)}"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin:14px 0 6px"><button type="button" class="btn ghost sm" onclick="marcarPerms(true)">Marcar tudo</button><button type="button" class="btn ghost sm" onclick="marcarPerms(false)">Limpar</button><button type="button" class="btn ghost sm" onclick="marcarPerms('ver')">Só visualizar</button></div>
+      <div class="tbl-wrap"><table class="perm-tbl">
+        <thead><tr><th>Área</th>${ACOES_ORDEM.map(a => `<th style="text-align:center">${ACOES[a]}</th>`).join('')}</tr></thead>
+        <tbody>${MODULOS.map(([k, nome, acoes]) => `<tr><td><b>${nome}</b></td>${ACOES_ORDEM.map(a => `<td style="text-align:center">${acoes.includes(a)
+          ? `<input type="checkbox" class="perm" data-m="${k}" data-a="${a}" ${p[k]?.includes(a) ? 'checked' : ''} aria-label="${nome}: ${ACOES[a]}">` : '<span class="muted">·</span>'}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+      <p class="hint" style="margin-top:8px">"Dar baixa" permite registrar pagamento/recebimento sem poder alterar valor, data ou descrição. Sem "Ver" a área fica escondida.</p>
+      <div class="modal-foot"><button type="button" class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn">Salvar</button></div>
+    </form>`);
+  document.querySelector('.modal').style.maxWidth = '900px';
+}
+function marcarPerms(v) { document.querySelectorAll('#mform .perm').forEach(c => c.checked = v === 'ver' ? c.dataset.a === 'ver' : v); }
+function salvarNivel(ev, id) {
+  ev.preventDefault();
+  const v = Object.fromEntries(new FormData(ev.target));
+  const permissoes = {};
+  document.querySelectorAll('#mform .perm:checked').forEach(c => (permissoes[c.dataset.m] = permissoes[c.dataset.m] || []).push(c.dataset.a));
+  const row = { nome: v.nome.trim(), descricao: v.descricao.trim() || null, permissoes };
+  run(() => id ? DB().update('niveis_acesso', id, row) : DB().insert('niveis_acesso', [row]), 'Nível salvo');
+  return false;
+}
+function excluirNivel(id) {
+  const n = nivel(id); if (!n) return;
+  const qtd = D.perfis.filter(p => p.nivel_id === id).length;
+  if (!confirm(`Excluir o nível "${n.nome}"?${qtd ? `\n\n${qtd} usuário(s) ficarão sem permissões até receberem outro nível.` : ''}`)) return;
+  run(() => DB().remove('niveis_acesso', id), 'Nível excluído');
+}
+function formUsuario(uid) {
+  const p = uid ? D.perfis.find(x => x.user_id === uid) : null;
+  const eu = p && p.user_id === user?.id;
+  const sel = new Set(p?.empresas || []);
+  openModal(p ? `Acesso de ${p.nome || p.email}` : 'Novo usuário', `
+    <form id="mform" onsubmit="return salvarUsuario(event, ${p ? `'${p.user_id}'` : 'null'})">
+      <div class="form-grid">
+        <div class="fld"><label>Nome</label><input name="nome" required maxlength="80" value="${esc(p?.nome)}"></div>
+        ${p ? `<div class="fld"><label>E-mail</label><input value="${esc(p.email)}" disabled></div>` : `
+        <div class="fld"><label>E-mail</label><input name="email" type="email" required autocomplete="off"></div>
+        <div class="fld"><label>Senha inicial</label><input name="senha" type="text" required minlength="6" autocomplete="new-password" placeholder="mínimo 6 caracteres"></div>`}
+        <div class="fld"><label>Nível de acesso</label><select name="nivel_id">${opts(D.niveis_acesso.map(n => [n.id, n.nome]), p?.nivel_id, '— sem nível —')}</select></div>
+        <div class="fld full"><label class="check"><input type="checkbox" name="admin" ${p?.admin ? 'checked' : ''} ${eu ? 'disabled' : ''}> Administrador (acesso total, inclusive usuários)</label></div>
+        <div class="fld full"><label>Empresas que pode acessar</label>
+          <div style="display:flex;flex-wrap:wrap;gap:6px 16px">${D.empresas.map(e => `<label class="check" style="font-weight:500"><input type="checkbox" name="emp" value="${e.id}" ${sel.has(e.id) ? 'checked' : ''}> ${esc(e.nome)}</label>`).join('')}</div>
+          <p class="hint">Nenhuma marcada = todas as empresas (inclusive as que forem criadas depois).</p></div>
+        ${p && !eu ? `<div class="fld full"><label class="check"><input type="checkbox" name="ativo" ${p.ativo || !p.nivel_id ? 'checked' : ''}> Ativo (pode entrar no app)</label></div>` : ''}
+      </div>
+      <div class="modal-foot"><button type="button" class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn">${p ? 'Salvar' : 'Criar usuário'}</button></div>
+    </form>`);
+}
+function salvarUsuario(ev, uid) {
+  ev.preventDefault();
+  const f = ev.target, v = Object.fromEntries(new FormData(f));
+  const empresas = [...f.querySelectorAll('input[name=emp]:checked')].map(c => c.value);
+  const eu = uid && uid === user?.id;
+  const dados = { nome: v.nome.trim(), nivel_id: v.nivel_id || null, admin: eu ? true : !!v.admin, empresas: empresas.length ? empresas : null };
+  if (!dados.admin && !dados.nivel_id && !confirm('Este usuário está sem nível de acesso e não vai conseguir ver nada. Salvar assim mesmo?')) return false;
+  if (uid) {
+    if (!eu) dados.ativo = !!v.ativo;
+    run(() => DB().update('perfis', uid, dados), 'Acesso atualizado');
+    return false;
+  }
+  run(async () => {
+    // cliente separado para não trocar a sessão do administrador
+    const tmp = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: 'cf-novo-usuario' } });
+    const { data, error } = await tmp.auth.signUp({ email: v.email.trim(), password: v.senha, options: { data: { nome: dados.nome } } });
+    if (error) throw new Error(/signup|sign up/i.test(error.message)
+      ? 'O Supabase está com novos cadastros desligados. Ligue "Allow new users to sign up" em Authentication → Sign In / Providers (quem se cadastrar sozinho fica aguardando liberação).'
+      : traduzErro(error.message));
+    if (!data.user || (data.user.identities && data.user.identities.length === 0)) throw new Error('Este e-mail já tem cadastro. Procure-o na lista e use "Editar".');
+    await DB().update('perfis', data.user.id, { ...dados, ativo: true });
+    if (!data.session) setTimeout(() => alert('Usuário criado. O Supabase enviou um e-mail de confirmação: a pessoa precisa clicar no link antes de entrar.\n\nPara dispensar a confirmação, desative "Confirm email" no Supabase (Authentication → Sign In / Providers → Email).'), 300);
+  }, 'Usuário criado');
+  return false;
+}
+function toggleUsuario(uid) {
+  const p = D.perfis.find(x => x.user_id === uid); if (!p) return;
+  if (p.ativo && !confirm(`Desativar ${p.nome || p.email}? A pessoa perde o acesso imediatamente.`)) return;
+  run(() => DB().update('perfis', uid, { ativo: !p.ativo }), p.ativo ? 'Usuário desativado' : 'Usuário ativado');
+}
+function formMinhaSenha() {
+  openModal('Alterar minha senha', `
+    <form id="mform" onsubmit="return salvarMinhaSenha(event)">
+      <div class="form-grid">
+        <div class="fld"><label>Nova senha</label><input name="s1" type="password" required minlength="6" autocomplete="new-password"></div>
+        <div class="fld"><label>Repita a nova senha</label><input name="s2" type="password" required minlength="6" autocomplete="new-password"></div>
+      </div>
+      <div class="modal-foot"><button type="button" class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn">Salvar</button></div>
+    </form>`);
+}
+async function salvarMinhaSenha(ev) {
+  ev.preventDefault();
+  const v = Object.fromEntries(new FormData(ev.target));
+  if (v.s1 !== v.s2) { alert('As senhas não são iguais.'); return false; }
+  const { error } = await sb.auth.updateUser({ password: v.s1 });
+  if (error) { alert('Não foi possível alterar: ' + traduzErro(error.message)); return false; }
+  closeModal(); toast('Senha alterada');
+  return false;
+}
+function renderPendente() {
+  document.getElementById('app').innerHTML = `
+    <div class="card login">
+      <h1>Controle Financeiro</h1>
+      <p style="margin-top:14px">Olá${meuPerfil?.nome ? ', <b>' + esc(meuPerfil.nome) + '</b>' : ''}! Seu acesso ${meuPerfil && (meuPerfil.nivel_id || meuPerfil.admin) ? 'está <b>desativado</b>' : 'está <b>aguardando liberação</b>'}.</p>
+      <p class="card-sub">Peça ao administrador para liberar seu usuário (<b>${esc(user?.email)}</b>). Assim que ele liberar, esta tela atualiza sozinha.</p>
+      <div style="display:flex;gap:8px"><button class="btn ghost" onclick="location.reload()">Atualizar</button><button class="btn ghost" onclick="logout()">Sair</button></div>
+    </div>`;
 }
 
 // ---------------- MODAL / TOAST ----------------
@@ -1150,6 +1879,7 @@ function renderLogin(msg, criar) {
         ${msg ? `<p class="err-msg">${esc(msg)}</p>` : ''}
         <button class="btn" style="justify-content:center">${criar ? 'Criar conta' : 'Entrar'}</button>
         <button type="button" class="linkbtn" onclick="renderLogin('', ${!criar})">${criar ? 'Já tenho conta — entrar' : 'Primeiro acesso? Criar conta'}</button>
+        ${criar ? '<p class="muted" style="margin:0">Depois de criar, o administrador precisa liberar seu acesso.</p>' : ''}
       </form>
     </div>`;
 }
@@ -1168,7 +1898,10 @@ function traduzErro(m) {
   if (/invalid login/i.test(m)) return 'E-mail ou senha incorretos.';
   if (/not confirmed/i.test(m)) return 'Confirme seu e-mail antes de entrar.';
   if (/signups not allowed|signup is disabled/i.test(m)) return 'Novos cadastros estão desativados. Peça acesso ao administrador.';
-  if (/already registered/i.test(m)) return 'Este e-mail já tem conta. Use "Entrar".';
+  if (/already registered/i.test(m)) return 'Este e-mail já tem conta.';
+  if (/password should be|at least 6/i.test(m)) return 'A senha precisa ter pelo menos 6 caracteres.';
+  if (/rate limit|too many/i.test(m)) return 'Muitas tentativas seguidas. Aguarde alguns minutos e tente de novo.';
+  if (/invalid email|email address .* is invalid/i.test(m)) return 'E-mail inválido.';
   return m;
 }
 async function logout() { await sb.auth.signOut(); }
@@ -1176,8 +1909,8 @@ async function logout() { await sb.auth.signOut(); }
 function renderSetup(err) {
   document.getElementById('app').innerHTML = `
     <div class="card" style="max-width:720px;margin:6vh auto">
-      <h1 style="font-size:22px">Falta criar as tabelas no Supabase</h1>
-      <p>O app conectou ao Supabase, mas as tabelas ainda não existem.</p>
+      <h1 style="font-size:22px">Falta criar ou atualizar as tabelas no Supabase</h1>
+      <p>O app conectou ao Supabase, mas o banco ainda não tem todas as tabelas desta versão.</p>
       <ol style="line-height:1.7">
         <li>Abra o painel do Supabase do projeto → <b>SQL Editor</b> → <b>New query</b>.</li>
         <li>Cole todo o conteúdo do arquivo <code>gestao/schema.sql</code> deste repositório e clique em <b>Run</b>.</li>
