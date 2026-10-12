@@ -1,5 +1,5 @@
 -- ==========================================================
--- A100 · Gestão — estrutura do banco (Supabase / PostgreSQL)
+-- Controle Financeiro — estrutura do banco (Supabase / PostgreSQL)
 -- Rode este arquivo UMA vez em: Supabase > SQL Editor > New query > Run
 -- É seguro rodar de novo: só cria o que ainda não existe.
 -- ==========================================================
