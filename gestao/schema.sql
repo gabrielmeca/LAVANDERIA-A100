@@ -109,6 +109,36 @@ create table if not exists public.formas_compra (
 );
 alter table public.lancamentos add column if not exists forma_compra text;
 
+-- Técnicos que realizam os atendimentos (lista editável)
+create table if not exists public.tecnicos (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  nome text not null unique,
+  telefone text,
+  ativo boolean not null default true
+);
+
+-- Serviços realizados: cada um gera automaticamente uma conta a receber
+create table if not exists public.atendimentos (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  empresa_id uuid not null references public.empresas(id) on delete cascade,
+  data date not null default current_date,
+  parceiro_id uuid references public.parceiros(id) on delete set null,
+  descricao text not null,
+  valor numeric(14,2) not null default 0,
+  tecnico_id uuid references public.tecnicos(id) on delete set null,
+  orcamento text,
+  laudo boolean not null default false,
+  forma_pagamento text,
+  vencimento date,
+  ja_recebido boolean not null default false,
+  servico_id uuid references public.servicos(id) on delete set null,
+  observacao text,
+  lancamento_id uuid references public.lancamentos(id) on delete set null
+);
+create index if not exists atendimentos_empresa_data on public.atendimentos (empresa_id, data);
+
 -- Níveis de acesso: permissoes = {"modulo": ["ver","criar",...], ...}
 create table if not exists public.niveis_acesso (
   id uuid primary key default gen_random_uuid(),
@@ -203,6 +233,48 @@ begin
   update lancamentos set forma_compra = novo where forma_compra = antigo;
 end $$;
 
+-- Serviço realizado -> conta a receber (criada ao lançar o serviço e atualizada ao editar)
+create or replace function public.atendimentos_sync() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  lid uuid;
+  descr text := new.descricao || coalesce(' · Orç. ' || nullif(trim(new.orcamento), ''), '');
+  obs text := concat_ws(' · ', 'Técnico: ' || (select nome from tecnicos where id = new.tecnico_id),
+                        'Laudo: ' || case when new.laudo then 'Sim' else 'Não' end, nullif(trim(new.observacao), ''));
+begin
+  perform set_config('app.ignorar_guarda', 'on', true);
+  if tg_op = 'INSERT' then
+    insert into lancamentos (empresa_id, tipo, descricao, parceiro_id, servico_id, categoria, valor, vencimento,
+                             status, pagamento, valor_pago, forma_pagamento, observacao)
+    values (new.empresa_id, 'receber', descr, new.parceiro_id, new.servico_id, 'Serviços', new.valor, coalesce(new.vencimento, new.data),
+            case when new.ja_recebido then 'pago' else 'pendente' end,
+            case when new.ja_recebido then new.data end, case when new.ja_recebido then new.valor end,
+            new.forma_pagamento, obs)
+    returning id into lid;
+    new.lancamento_id := lid;
+  elsif new.lancamento_id is not null then
+    update lancamentos set empresa_id = new.empresa_id, descricao = descr, parceiro_id = new.parceiro_id, servico_id = new.servico_id,
+      valor = new.valor, vencimento = coalesce(new.vencimento, new.data), forma_pagamento = new.forma_pagamento, observacao = obs
+    where id = new.lancamento_id;
+  end if;
+  perform set_config('app.ignorar_guarda', 'off', true);
+  return new;
+end $$;
+drop trigger if exists atendimentos_sync on public.atendimentos;
+create trigger atendimentos_sync before insert or update on public.atendimentos
+  for each row execute function public.atendimentos_sync();
+
+-- Excluir o serviço exclui a conta a receber, se ela ainda não foi recebida
+create or replace function public.atendimentos_apaga_conta() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from lancamentos where id = old.lancamento_id and status <> 'pago';
+  return old;
+end $$;
+drop trigger if exists atendimentos_apaga_conta on public.atendimentos;
+create trigger atendimentos_apaga_conta after delete on public.atendimentos
+  for each row execute function public.atendimentos_apaga_conta();
+
 -- Novo cadastro (pelo app ou pelo painel) ganha um perfil "aguardando liberação".
 -- Se ainda não existe nenhum administrador, o primeiro usuário vira administrador.
 create or replace function public.novo_usuario() returns trigger
@@ -262,7 +334,7 @@ where not exists (select 1 from public.formas_compra);
 do $$
 declare t text; pol record;
 begin
-  foreach t in array array['empresas','parceiros','servicos','lancamentos','produtos','movimentos_estoque','categorias','formas_compra','niveis_acesso','perfis'] loop
+  foreach t in array array['empresas','parceiros','servicos','lancamentos','produtos','movimentos_estoque','categorias','formas_compra','tecnicos','atendimentos','niveis_acesso','perfis'] loop
     execute format('alter table public.%I enable row level security', t);
     for pol in select policyname from pg_policies where schemaname = 'public' and tablename = t loop
       execute format('drop policy %I on public.%I', pol.policyname, t);
@@ -316,6 +388,17 @@ create policy ins on public.formas_compra for insert to authenticated with check
 create policy upd on public.formas_compra for update to authenticated using (pode('categorias','editar'));
 create policy del on public.formas_compra for delete to authenticated using (pode('categorias','excluir'));
 
+-- serviços realizados e técnicos: permissão da área "Serviços"
+create policy sel on public.atendimentos for select to authenticated using (ve_empresa(empresa_id) and pode('servicos','ver'));
+create policy ins on public.atendimentos for insert to authenticated with check (ve_empresa(empresa_id) and pode('servicos','criar'));
+create policy upd on public.atendimentos for update to authenticated using (ve_empresa(empresa_id) and pode('servicos','editar')) with check (ve_empresa(empresa_id));
+create policy del on public.atendimentos for delete to authenticated using (ve_empresa(empresa_id) and pode('servicos','excluir'));
+
+create policy sel on public.tecnicos for select to authenticated using (usuario_ativo());
+create policy ins on public.tecnicos for insert to authenticated with check (pode('servicos','criar'));
+create policy upd on public.tecnicos for update to authenticated using (pode('servicos','editar'));
+create policy del on public.tecnicos for delete to authenticated using (pode('servicos','excluir'));
+
 -- níveis e perfis: só administradores alteram
 create policy sel on public.niveis_acesso for select to authenticated using (usuario_ativo());
 create policy ins on public.niveis_acesso for insert to authenticated with check (eh_admin());
@@ -332,7 +415,7 @@ create policy del on public.perfis for delete to authenticated using (eh_admin()
 do $$
 declare t text;
 begin
-  foreach t in array array['empresas','parceiros','servicos','lancamentos','produtos','movimentos_estoque','categorias','formas_compra','niveis_acesso','perfis'] loop
+  foreach t in array array['empresas','parceiros','servicos','lancamentos','produtos','movimentos_estoque','categorias','formas_compra','tecnicos','atendimentos','niveis_acesso','perfis'] loop
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
